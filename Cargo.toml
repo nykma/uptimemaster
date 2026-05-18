@@ -1,0 +1,28 @@
+[package]
+name = "uptimemaster"
+version = "0.1.0"
+edition = "2024"
+description = "Network uptime monitoring daemon that exposes Prometheus metrics"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+prometheus-client = "0.23"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+surge-ping = "0.8"
+rand = "0.8"
+pnet = "0.35"
+pnet_base = "0.35"
+pnet_datalink = "0.35"
+notify = "7"
+hickory-resolver = "0.25"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive"] }
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+axum = "0.8"

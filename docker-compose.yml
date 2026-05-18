@@ -1,0 +1,11 @@
+services:
+  uptimemaster:
+    image: ghcr.io/${GITHUB_REPOSITORY:-user/uptimemaster}:latest-x86_64
+    container_name: uptimemaster
+    restart: unless-stopped
+    ports:
+      - "9191:9191"
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+    cap_add:
+      - NET_RAW

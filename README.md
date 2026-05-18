@@ -1,0 +1,98 @@
+# uptimemaster
+
+Network uptime monitoring daemon written in Rust. Regularly probes your configured network endpoints and exposes the results as [Prometheus](https://prometheus.io/) metrics.
+
+## Quick Start (Docker Compose)
+
+```bash
+cp config.sample.toml config.toml
+# edit config.toml to suit your needs
+docker compose up -d
+```
+
+The configuration is fully described in [`config.sample.toml`](config.sample.toml). Copy it to `config.toml`, adjust the endpoints you want to monitor, and you are ready to go.
+
+Prometheus metrics are available at `http://localhost:9191/metrics` (port configurable in `[general]`).
+
+> **Note:** The container image is built from the Nix flake and published to `ghcr.io`. See [`docker-compose.yml`](docker-compose.yml) for the exact image tag and mount details.
+
+## Probe Types
+
+| Protocol | Description | Target Example |
+|---|---|---|
+| `tcp` | TCP connect probe | `192.168.1.1:80` |
+| `udp` | UDP datagram send/receive | `8.8.8.8:53` |
+| `icmp` | ICMP echo (ping) | `8.8.8.8` or `example.com` |
+| `http` | HTTP GET/POST, status code check | `http://example.com/api` |
+| `https` | HTTPS with TLS handshake timing | `https://example.com/health` |
+| `arp` | ARP request (L2, MAC address) | `aa:bb:cc:dd:ee:ff` |
+
+HTTP probes support `GET` or `POST` methods, custom headers, JSON payloads, and expected status code validation. HTTPS probes additionally measure the TLS handshake duration.
+
+## Important: ICMP Requires `NET_RAW`
+
+ICMP ping uses raw sockets, which require the `CAP_NET_RAW` Linux capability. **If you use `protocol = "icmp"` for any endpoint, you must grant this capability.**
+
+### In Docker Compose
+
+The provided [`docker-compose.yml`](docker-compose.yml) already includes:
+
+```yaml
+cap_add:
+  - NET_RAW
+```
+
+No extra steps are needed if you use the bundled Compose file.
+
+### Running directly (without Docker)
+
+Run as `root`, or grant the capability to the binary:
+
+```bash
+sudo setcap cap_net_raw+ep ./uptimemaster
+```
+
+If `CAP_NET_RAW` is missing, uptimemaster prints a warning at startup and ICMP probes will fail at runtime with a permission error.
+
+## Configuration
+
+See [`config.sample.toml`](config.sample.toml) for all options and real-world examples. Quick overview:
+
+```toml
+[general]
+port = 9191
+max_concurrent_probes = 50
+default_interval_secs = 30
+default_timeout_ms = 5000
+extra_labels = { node = "my_home" }
+
+[[endpoint]]
+target = "192.168.1.1:80"
+protocol = "tcp"
+interval_secs = 15
+
+[[endpoint]]
+target = "8.8.4.4"
+protocol = "icmp"
+
+[[endpoint]]
+target = "https://example.com/health"
+protocol = "https"
+method = "get"
+expected_status = [200]
+```
+
+- `[general]` — global defaults (metrics port, concurrency, probe interval, timeout).
+- `[[endpoint]]` — one entry per target. Required fields: `target`, `protocol`. All other fields have sensible defaults.
+
+Copy `config.sample.toml` to `config.toml` and tweak it to match your environment.
+
+## Exported Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `um_up` | Gauge | 1 if the target is reachable, 0 otherwise |
+| `um_request_rtt_seconds` | Gauge | Round-trip time in seconds |
+| `um_ssl_duration_seconds` | Gauge | TLS handshake duration (HTTPS only) |
+
+All metrics carry `target`, `ip`, `protocol`, `port`, and any user-defined `extra_labels`.

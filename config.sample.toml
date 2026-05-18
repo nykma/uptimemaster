@@ -1,0 +1,75 @@
+[general]
+port = 9191
+max_concurrent_probes = 50
+default_interval_secs = 30
+default_timeout_ms = 5000
+extra_labels = { node = "my_home" }
+
+# TCP probe - check if a port is reachable
+[[endpoint]]
+target = "192.168.1.1:80"
+protocol = "tcp"
+timeout_ms = 3000
+interval_secs = 15
+extra_labels = { type = "home", service = "router" }
+
+# ICMP ping - requires CAP_NET_RAW or root
+[[endpoint]]
+target = "8.8.4.4"
+protocol = "icmp"
+timeout_ms = 1000
+interval_secs = 10
+extra_labels = { type = "dns", service = "google" }
+
+# UDP probe - send datagram and wait for response
+[[endpoint]]
+target = "8.8.8.8:53"
+protocol = "udp"
+timeout_ms = 2000
+extra_labels = { type = "dns", service = "google" }
+
+# HTTP GET - check status code
+[[endpoint]]
+target = "https://mastodon.social/health"
+protocol = "https"
+method = "get"
+expected_status = [200]
+timeout_ms = 5000
+extra_labels = { type = "mastodon", service = "mastodon.social" }
+
+# HTTP POST with payload and custom headers (multi-line extra_labels)
+[[endpoint]]
+target = "https://httpbin.org/status/201"
+protocol = "https"
+method = "post"
+headers = { Authorization = "Bearer your-token-here", X-Custom = "value" }
+payload = '{"event": "ping"}'
+content_type = "application/json"
+expected_status = [201]
+timeout_ms = 5000
+interval_secs = 60
+extra_labels = { type = "my_business", service = "httpbin" }
+
+# ICMP ping to a domain - resolves DNS, uses first IP by default
+[[endpoint]]
+target = "example.com"
+protocol = "icmp"
+timeout_ms = 2000
+ping_all = false
+
+# HTTPS with all IPs - resolves DNS and probes each IP
+[[endpoint]]
+target = "https://httpbin.org/status/200"
+protocol = "https"
+method = "get"
+expected_status = [200]
+ping_all = true
+timeout_ms = 5000
+extra_labels = { type = "my_business", service = "httpbin" }
+
+# ARP ping - MAC address on local subnet
+[[endpoint]]
+target = "aa:bb:cc:dd:ee:ff"
+protocol = "arp"
+timeout_ms = 2000
+interval_secs = 10
