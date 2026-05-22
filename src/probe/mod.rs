@@ -10,10 +10,14 @@ pub struct ProbeResult {
     pub port: Option<u16>,
     pub protocol: Protocol,
     pub target: String,
+    pub hide_ip_label: bool,
 }
 
 impl ProbeResult {
-    pub fn with_extra_labels(self, extra_labels: &std::collections::HashMap<String, String>) -> LabeledProbeResult {
+    pub fn with_extra_labels(
+        self,
+        extra_labels: &std::collections::HashMap<String, String>,
+    ) -> LabeledProbeResult {
         LabeledProbeResult {
             inner: self,
             extra_labels: extra_labels.clone(),
@@ -36,12 +40,13 @@ impl std::fmt::Debug for ProbeResult {
             .field("port", &self.port)
             .field("protocol", &self.protocol)
             .field("target", &self.target)
+            .field("hide_ip_label", &self.hide_ip_label)
             .finish()
     }
 }
 
+pub mod arp;
+pub mod http;
+pub mod icmp;
 pub mod tcp;
 pub mod udp;
-pub mod icmp;
-pub mod http;
-pub mod arp;

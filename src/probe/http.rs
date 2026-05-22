@@ -39,6 +39,7 @@ pub async fn probe_http(
                 port: Some(actual_port),
                 protocol: Protocol::Http,
                 target: target_label,
+                hide_ip_label: false,
             };
         }
     };
@@ -90,6 +91,7 @@ pub async fn probe_http(
                 port: Some(actual_port),
                 protocol,
                 target: target_label,
+                hide_ip_label: false,
             }
         }
         Err(e) => {
@@ -109,6 +111,7 @@ pub async fn probe_http(
                 port: Some(actual_port),
                 protocol,
                 target: target_label,
+                hide_ip_label: false,
             }
         }
     }
@@ -147,9 +150,8 @@ async fn measure_ssl_duration(
         _ => return None,
     };
 
-    let root_store = rustls::RootCertStore::from_iter(
-        webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-    );
+    let root_store =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
@@ -171,7 +173,9 @@ async fn measure_ssl_duration(
 }
 
 fn extract_hostname(url: &str) -> Option<String> {
-    let without_scheme = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let host_port = without_scheme.split('/').next()?;
     let hostname = host_port.split(':').next()?;
     Some(hostname.to_string())

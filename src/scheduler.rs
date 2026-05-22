@@ -178,6 +178,8 @@ async fn run_probe(endpoint: &EndpointConfig, timeout: Duration) -> Vec<probe::P
             None => continue,
         };
 
+        let mut result = result;
+        result.hide_ip_label = target.hide_ip_label;
         results.push(result);
 
         let _enter = span.enter();

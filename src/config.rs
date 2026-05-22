@@ -52,7 +52,7 @@ pub struct EndpointConfig {
     /// Probe all DNS-resolved IPs instead of just the first.
     #[serde(default)]
     #[allow(dead_code)]
-    pub ping_all: bool,
+    pub probe_all: bool,
     /// Extra labels to attach to Prometheus metrics for this endpoint.
     #[serde(default)]
     pub extra_labels: HashMap<String, String>,
@@ -125,6 +125,7 @@ pub struct ResolvedTarget {
     pub port: Option<u16>,
     #[allow(dead_code)]
     pub protocol: Protocol,
+    pub hide_ip_label: bool,
 }
 
 impl EndpointConfig {

@@ -28,6 +28,7 @@ pub async fn probe_icmp(ip: IpAddr, timeout_duration: Duration, target: String) 
                 port: None,
                 protocol: Protocol::Icmp,
                 target,
+                hide_ip_label: false,
             };
         }
     };
@@ -47,6 +48,7 @@ pub async fn probe_icmp(ip: IpAddr, timeout_duration: Duration, target: String) 
             port: None,
             protocol: Protocol::Icmp,
             target,
+            hide_ip_label: false,
         },
         Err(e) => {
             match &e {
@@ -69,6 +71,7 @@ pub async fn probe_icmp(ip: IpAddr, timeout_duration: Duration, target: String) 
                 port: None,
                 protocol: Protocol::Icmp,
                 target,
+                hide_ip_label: false,
             }
         }
     }

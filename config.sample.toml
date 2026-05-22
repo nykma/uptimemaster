@@ -55,7 +55,7 @@ extra_labels = { type = "my_business", service = "httpbin" }
 target = "example.com"
 protocol = "icmp"
 timeout_ms = 2000
-ping_all = false
+probe_all = true # Probe the first IP returned by DNS. This is default setting.
 
 # HTTPS with all IPs - resolves DNS and probes each IP
 [[endpoint]]
@@ -63,7 +63,7 @@ target = "https://httpbin.org/status/200"
 protocol = "https"
 method = "get"
 expected_status = [200]
-ping_all = true
+probe_all = true # Probe all IPs returned by DNS
 timeout_ms = 5000
 extra_labels = { type = "my_business", service = "httpbin" }
 

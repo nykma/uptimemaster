@@ -18,6 +18,7 @@ pub async fn resolve_endpoint(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> 
                 ip: IpAddr::from_str("0.0.0.0").unwrap(), // ARP is L2, no IP needed
                 port: None,
                 protocol: Protocol::Arp,
+                hide_ip_label: false,
             }]
         }
         Protocol::Icmp => resolve_icmp_target(endpoint).await,
@@ -34,6 +35,7 @@ async fn resolve_icmp_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
             ip,
             port: None,
             protocol: Protocol::Icmp,
+            hide_ip_label: false,
         }];
     }
 
@@ -43,13 +45,14 @@ async fn resolve_icmp_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
         return vec![];
     }
 
-    if endpoint.ping_all {
+    if endpoint.probe_all {
         ips.into_iter()
             .map(|ip| ResolvedTarget {
                 original: target.clone(),
                 ip,
                 port: None,
                 protocol: Protocol::Icmp,
+                hide_ip_label: false,
             })
             .collect()
     } else {
@@ -58,6 +61,7 @@ async fn resolve_icmp_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
             ip: ips[0],
             port: None,
             protocol: Protocol::Icmp,
+            hide_ip_label: true,
         }]
     }
 }
@@ -78,6 +82,7 @@ async fn resolve_tcp_udp_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedT
             ip,
             port: Some(port),
             protocol: endpoint.protocol,
+            hide_ip_label: false,
         }];
     }
 
@@ -87,13 +92,14 @@ async fn resolve_tcp_udp_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedT
         return vec![];
     }
 
-    if endpoint.ping_all {
+    if endpoint.probe_all {
         ips.into_iter()
             .map(|ip| ResolvedTarget {
                 original: target.clone(),
                 ip,
                 port: Some(port),
                 protocol: endpoint.protocol,
+                hide_ip_label: false,
             })
             .collect()
     } else {
@@ -102,6 +108,7 @@ async fn resolve_tcp_udp_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedT
             ip: ips[0],
             port: Some(port),
             protocol: endpoint.protocol,
+            hide_ip_label: true,
         }]
     }
 }
@@ -118,6 +125,7 @@ async fn resolve_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
             ip,
             port: Some(port),
             protocol: endpoint.protocol,
+            hide_ip_label: false,
         }];
     }
 
@@ -127,13 +135,14 @@ async fn resolve_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
         return vec![];
     }
 
-    if endpoint.ping_all {
+    if endpoint.probe_all {
         ips.into_iter()
             .map(|ip| ResolvedTarget {
                 original: target.clone(),
                 ip,
                 port: Some(port),
                 protocol: endpoint.protocol,
+                hide_ip_label: false,
             })
             .collect()
     } else {
@@ -142,6 +151,7 @@ async fn resolve_http_target(endpoint: &EndpointConfig) -> Vec<ResolvedTarget> {
             ip: ips[0],
             port: Some(port),
             protocol: endpoint.protocol,
+            hide_ip_label: true,
         }]
     }
 }

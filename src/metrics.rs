@@ -50,9 +50,11 @@ impl Metrics {
         let r = &result.inner;
         let mut labels = vec![
             ("target".to_string(), r.target.clone()),
-            ("ip".to_string(), r.ip.to_string()),
             ("protocol".to_string(), r.protocol.to_string()),
         ];
+        if !r.hide_ip_label {
+            labels.push(("ip".to_string(), r.ip.to_string()));
+        }
         if let Some(port) = r.port {
             labels.push(("port".to_string(), port.to_string()));
         }
@@ -105,6 +107,7 @@ mod tests {
             port: Some(443),
             protocol: Protocol::Tcp,
             target: "192.168.1.1:443".to_string(),
+            hide_ip_label: false,
         }
         .with_extra_labels(&extra);
 

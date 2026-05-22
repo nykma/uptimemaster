@@ -21,6 +21,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
                 port: None,
                 protocol: Protocol::Arp,
                 target,
+                hide_ip_label: false,
             };
         }
     };
@@ -37,6 +38,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
                 port: None,
                 protocol: Protocol::Arp,
                 target,
+                hide_ip_label: false,
             };
         }
     };
@@ -54,6 +56,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
             port: None,
             protocol: Protocol::Arp,
             target,
+            hide_ip_label: false,
         },
         _ => ProbeResult {
             up: false,
@@ -63,6 +66,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
             port: None,
             protocol: Protocol::Arp,
             target,
+            hide_ip_label: false,
         },
     }
 }
@@ -72,8 +76,13 @@ fn parse_mac_address(s: &str) -> Option<MacAddr> {
     if parts.len() != 6 {
         return None;
     }
-    let bytes: Vec<u8> = parts.iter().map(|p| u8::from_str_radix(p, 16).ok()).collect::<Option<Vec<u8>>>()?;
-    Some(MacAddr::new(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]))
+    let bytes: Vec<u8> = parts
+        .iter()
+        .map(|p| u8::from_str_radix(p, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    Some(MacAddr::new(
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+    ))
 }
 
 fn find_interface_for_arp() -> Option<pnet_datalink::NetworkInterface> {
@@ -101,13 +110,27 @@ async fn send_arp_request(
         Err(e) => return Err(format!("Failed to create channel: {}", e)),
     };
 
-    let src_ip = interface.ips.iter()
+    let src_ip = interface
+        .ips
+        .iter()
         .find(|ip| matches!(ip.ip(), IpAddr::V4(_)))
-        .map(|ip| if let IpAddr::V4(v4) = ip.ip() { v4 } else { std::net::Ipv4Addr::UNSPECIFIED })
+        .map(|ip| {
+            if let IpAddr::V4(v4) = ip.ip() {
+                v4
+            } else {
+                std::net::Ipv4Addr::UNSPECIFIED
+            }
+        })
         .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
 
     let mut packet_buf = [0u8; 42];
-    build_arp_packet(&mut packet_buf, &src_mac, &MacAddr::broadcast(), target_mac, src_ip);
+    build_arp_packet(
+        &mut packet_buf,
+        &src_mac,
+        &MacAddr::broadcast(),
+        target_mac,
+        src_ip,
+    );
 
     match tx.send_to(&packet_buf, None) {
         Some(Ok(())) => {}
@@ -129,8 +152,7 @@ async fn send_arp_request(
                 if packet[12] == 0x08 && packet[13] == 0x06 {
                     if packet[20] == 0x00 && packet[21] == 0x02 {
                         let sender_mac = MacAddr::new(
-                            packet[22], packet[23], packet[24],
-                            packet[25], packet[26], packet[27],
+                            packet[22], packet[23], packet[24], packet[25], packet[26], packet[27],
                         );
                         if &sender_mac == target_mac {
                             return Ok(true);
@@ -143,19 +165,41 @@ async fn send_arp_request(
     }
 }
 
-fn build_arp_packet(buf: &mut [u8; 42], src_mac: &MacAddr, dst_mac: &MacAddr, target_mac: &MacAddr, src_ip: std::net::Ipv4Addr) {
-    buf[0..6].copy_from_slice(&[dst_mac.0, dst_mac.1, dst_mac.2, dst_mac.3, dst_mac.4, dst_mac.5]);
-    buf[6..12].copy_from_slice(&[src_mac.0, src_mac.1, src_mac.2, src_mac.3, src_mac.4, src_mac.5]);
+fn build_arp_packet(
+    buf: &mut [u8; 42],
+    src_mac: &MacAddr,
+    dst_mac: &MacAddr,
+    target_mac: &MacAddr,
+    src_ip: std::net::Ipv4Addr,
+) {
+    buf[0..6].copy_from_slice(&[
+        dst_mac.0, dst_mac.1, dst_mac.2, dst_mac.3, dst_mac.4, dst_mac.5,
+    ]);
+    buf[6..12].copy_from_slice(&[
+        src_mac.0, src_mac.1, src_mac.2, src_mac.3, src_mac.4, src_mac.5,
+    ]);
     buf[12] = 0x08;
     buf[13] = 0x06;
-    buf[14] = 0x00; buf[15] = 0x01;
-    buf[16] = 0x08; buf[17] = 0x00;
+    buf[14] = 0x00;
+    buf[15] = 0x01;
+    buf[16] = 0x08;
+    buf[17] = 0x00;
     buf[18] = 6;
     buf[19] = 4;
-    buf[20] = 0x00; buf[21] = 0x01;
-    buf[22..28].copy_from_slice(&[src_mac.0, src_mac.1, src_mac.2, src_mac.3, src_mac.4, src_mac.5]);
+    buf[20] = 0x00;
+    buf[21] = 0x01;
+    buf[22..28].copy_from_slice(&[
+        src_mac.0, src_mac.1, src_mac.2, src_mac.3, src_mac.4, src_mac.5,
+    ]);
     let src_octets = src_ip.octets();
     buf[28..32].copy_from_slice(&src_octets);
-    buf[32..38].copy_from_slice(&[target_mac.0, target_mac.1, target_mac.2, target_mac.3, target_mac.4, target_mac.5]);
+    buf[32..38].copy_from_slice(&[
+        target_mac.0,
+        target_mac.1,
+        target_mac.2,
+        target_mac.3,
+        target_mac.4,
+        target_mac.5,
+    ]);
     buf[38..42].copy_from_slice(&src_octets);
 }
