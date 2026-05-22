@@ -66,15 +66,11 @@ impl Metrics {
         let up_gauge = self.um_up.get_or_create(&labels);
         up_gauge.set(if r.up { 1 } else { 0 });
 
-        if let Some(rtt) = r.rtt_ms {
-            let rtt_gauge = self.um_request_rtt.get_or_create(&labels);
-            rtt_gauge.set(rtt);
-        }
+        let rtt_gauge = self.um_request_rtt.get_or_create(&labels);
+        rtt_gauge.set(r.rtt_ms.unwrap_or(0.0));
 
-        if let Some(ssl) = r.ssl_duration_ms {
-            let ssl_gauge = self.um_ssl_duration.get_or_create(&labels);
-            ssl_gauge.set(ssl);
-        }
+        let ssl_gauge = self.um_ssl_duration.get_or_create(&labels);
+        ssl_gauge.set(r.ssl_duration_ms.unwrap_or(0.0));
     }
 
     pub fn registry(&self) -> Arc<Registry> {
