@@ -5,16 +5,19 @@ Network uptime monitoring daemon written in Rust. Regularly probes your configur
 ## Quick Start (Docker Compose)
 
 ```bash
-cp config.sample.toml config.toml
-# edit config.toml to suit your needs
+mkdir config
+cp config.sample.toml config/config.toml
+# edit config/config.toml to suit your needs
 docker compose up -d
 ```
 
-The configuration is fully described in [`config.sample.toml`](config.sample.toml). Copy it to `config.toml`, adjust the endpoints you want to monitor, and you are ready to go.
+The configuration is fully described in [`config.sample.toml`](config.sample.toml). Copy it to `config/config.toml`, adjust the endpoints you want to monitor, and you are ready to go.
 
 Prometheus metrics are available at `http://localhost:9191/metrics` (port configurable in `[general]`).
 
 > **Note:** The container image is built from the Nix flake and published to `ghcr.io`. See [`docker-compose.yml`](docker-compose.yml) for the exact image tag and mount details.
+>
+> Config is loaded from a **directory** (`/config` by default). All `.toml` files in it are read in alphabetical order and merged. See [Configuration](#configuration) for details.
 
 ## Probe Types
 
@@ -56,9 +59,16 @@ If `CAP_NET_RAW` is missing, uptimemaster prints a warning at startup and ICMP p
 
 ## Configuration
 
+uptimemaster reads all `.toml` files from a configuration directory (default: `/config`).
+
+- **`config.toml`** is processed first and is the **only** file that may define `[general]`. All other files must contain only `[[endpoint]]` entries.
+- Other `.toml` files (e.g. `dns.toml`, `web.toml`) are read in alphabetical order and their endpoints are merged.
+- Hot-reloading: changes to any `.toml` file in the directory trigger a config reload.
+
 See [`config.sample.toml`](config.sample.toml) for all options and real-world examples. Quick overview:
 
 ```toml
+# config/config.toml — the only file that can have [general]
 [general]
 port = 9191
 max_concurrent_probes = 50
@@ -69,12 +79,13 @@ extra_labels = { node = "my_home" }
 [[endpoint]]
 target = "192.168.1.1:80"
 protocol = "tcp"
-interval_secs = 15
 
+# config/dns.toml — endpoint-only file
 [[endpoint]]
 target = "8.8.4.4"
 protocol = "icmp"
 
+# config/web.toml — endpoint-only file
 [[endpoint]]
 target = "https://example.com/health"
 protocol = "https"
@@ -82,10 +93,8 @@ method = "get"
 expected_status = [200]
 ```
 
-- `[general]` — global defaults (metrics port, concurrency, probe interval, timeout).
+- `[general]` — global defaults (metrics port, concurrency, probe interval, timeout). **Only allowed in `config.toml`.**
 - `[[endpoint]]` — one entry per target. Required fields: `target`, `protocol`. All other fields have sensible defaults.
-
-Copy `config.sample.toml` to `config.toml` and tweak it to match your environment.
 
 ## Exported Metrics
 

@@ -13,8 +13,8 @@ mod watcher;
 #[derive(Parser)]
 #[command(name = "uptimemaster", about = "Network uptime monitoring daemon that exposes Prometheus metrics")]
 struct Cli {
-    /// Path to configuration file
-    #[arg(short, long, default_value = "/etc/uptimemaster/config.toml")]
+    /// Path to configuration directory
+    #[arg(short, long, default_value = "/config")]
     config: String,
 }
 
@@ -37,7 +37,7 @@ async fn main() {
 
     info!("Loading config from: {}", config_path);
 
-    let initial_config = match config::load_from_file(&config_path) {
+    let initial_config = match config::load_from_dir(&config_path) {
         Ok(c) => c,
         Err(e) => {
             error!("Failed to load config: {}", e);
@@ -73,7 +73,7 @@ async fn main() {
             if watcher.wait_for_change() {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                match config::load_from_file(&config_path) {
+                match config::load_from_dir(&config_path) {
                     Ok(new_config) => {
                         info!("Config reloaded successfully");
                         for warning in validate_icmp_privileges(&new_config) {

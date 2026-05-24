@@ -103,7 +103,7 @@
             ];
 
             config = {
-              Cmd = [ "/bin/uptimemaster" "-c" "/config/config.toml" ];
+              Cmd = [ "/bin/uptimemaster" "-c" "/config" ];
               ExposedPorts = {
                 "9191/tcp" = { };
               };

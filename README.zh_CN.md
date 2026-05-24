@@ -5,16 +5,19 @@
 ## 快速开始（Docker Compose）
 
 ```bash
-cp config.sample.toml config.toml
-# 根据你的需要编辑 config.toml
+mkdir config
+cp config.sample.toml config/config.toml
+# 根据你的需要编辑 config/config.toml
 docker compose up -d
 ```
 
-所有配置项在 [`config.sample.toml`](config.sample.toml) 中有完整说明。复制为 `config.toml`、调整你要监控的端点后即可运行。
+所有配置项在 [`config.sample.toml`](config.sample.toml) 中有完整说明。复制为 `config/config.toml`、调整你要监控的端点后即可运行。
 
 Prometheus 指标地址为 `http://localhost:9191/metrics`（端口可在 `[general]` 中修改）。
 
 > **提示：** 容器镜像通过 Nix flake 构建并发布到 `ghcr.io`。详细镜像标签和挂载配置请查看 [`docker-compose.yml`](docker-compose.yml)。
+>
+> 配置通过**目录**加载（默认 `/config`）。目录下所有 `.toml` 文件按文件名排序后合并读取，详见[配置文件](#配置文件)。
 
 ## 支持的探测类型
 
@@ -56,9 +59,16 @@ sudo setcap cap_net_raw+ep ./uptimemaster
 
 ## 配置文件
 
+uptimemaster 从一个配置目录中加载所有 `.toml` 文件（默认路径 `/config`）。
+
+- **`config.toml`** 最先被处理，且是**唯一**允许定义 `[general]` 的文件。其他文件只能包含 `[[endpoint]]` 条目。
+- 其他 `.toml` 文件（如 `dns.toml`、`web.toml`）按文件名排序后合并其端点。
+- 热加载：目录中任意 `.toml` 文件的变更都会触发配置重载。
+
 完整配置项及示例见 [`config.sample.toml`](config.sample.toml)，这里快速概览：
 
 ```toml
+# config/config.toml — 唯一可以写 [general] 的文件
 [general]
 port = 9191
 max_concurrent_probes = 50
@@ -69,12 +79,13 @@ extra_labels = { node = "my_home" }
 [[endpoint]]
 target = "192.168.1.1:80"
 protocol = "tcp"
-interval_secs = 15
 
+# config/dns.toml — 只放 endpoint
 [[endpoint]]
 target = "8.8.4.4"
 protocol = "icmp"
 
+# config/web.toml — 只放 endpoint
 [[endpoint]]
 target = "https://example.com/health"
 protocol = "https"
@@ -82,10 +93,8 @@ method = "get"
 expected_status = [200]
 ```
 
-- `[general]` — 全局默认值（指标端口、并发数、探测间隔、超时时间）。
+- `[general]` — 全局默认值（指标端口、并发数、探测间隔、超时时间）。**仅允许写在 `config.toml`。**
 - `[[endpoint]]` — 每个端点一个配置块。必填项：`target`、`protocol`，其余字段均有合理默认值。
-
-复制 `config.sample.toml` 为 `config.toml` 并根据实际情况调整即可。
 
 ## 导出的指标
 

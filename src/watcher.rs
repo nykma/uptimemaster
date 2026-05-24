@@ -22,16 +22,16 @@ impl ConfigWatcher {
         )
         .map_err(|e| format!("failed to create file watcher: {}", e))?;
 
-        let path = Path::new(path);
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("config path '{}' has no parent directory", path.display()))?;
+        let dir = Path::new(path);
+        if !dir.is_dir() {
+            return Err(format!("config path '{}' is not a directory", dir.display()));
+        }
 
         watcher
-            .watch(parent, RecursiveMode::NonRecursive)
+            .watch(dir, RecursiveMode::NonRecursive)
             .map_err(|e| format!("failed to watch config directory: {}", e))?;
 
-        info!("Watching config file: {}", path.display());
+        info!("Watching config directory: {}", dir.display());
 
         Ok(Self {
             _watcher: watcher,
@@ -39,10 +39,15 @@ impl ConfigWatcher {
         })
     }
 
-    /// Blocks until a config change event is detected. Returns true if a reload should happen.
     pub fn wait_for_change(&mut self) -> bool {
         match self.rx.recv() {
             Ok(Ok(event)) => {
+                let is_toml_change = event.paths.iter().any(|p| {
+                    p.extension().map_or(false, |ext| ext == "toml")
+                });
+                if !is_toml_change {
+                    return false;
+                }
                 use notify::EventKind;
                 match event.kind {
                     EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {

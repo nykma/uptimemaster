@@ -6,6 +6,6 @@ services:
     ports:
       - "9191:9191"
     volumes:
-      - ./config.toml:/config/config.toml:ro
+      - ./config:/config:ro
     cap_add:
       - NET_RAW

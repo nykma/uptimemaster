@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -7,6 +8,7 @@ use serde::Deserialize;
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
+    #[serde(default)]
     pub endpoint: Vec<EndpointConfig>,
 }
 
@@ -221,13 +223,86 @@ impl Default for GeneralConfig {
     }
 }
 
-pub fn load_from_file(path: &str) -> Result<Config, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read config file '{}': {}", path, e))?;
-    load_from_str(&content)
+/// Load configuration from a directory containing .toml files.
+///
+/// - `config.toml` is always processed first and is the ONLY file that may define `[general]`.
+/// - Other `.toml` files are read in alphabetical order and may only contain `[[endpoint]]` entries.
+pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
+    let dir = Path::new(dir_path);
+    if !dir.is_dir() {
+        return Err(format!("'{}' is not a directory", dir_path));
+    }
+
+    let mut toml_files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("failed to read directory '{}': {}", dir_path, e))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "toml") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    toml_files.sort_by_key(|p| {
+        let is_config = p
+            .file_name()
+            .map_or(false, |n| n == "config.toml");
+        (if is_config { 0 } else { 1 }, p.file_name().map(|n| n.to_os_string()).unwrap_or_default())
+    });
+
+    let mut general: Option<GeneralConfig> = None;
+    let mut endpoints: Vec<EndpointConfig> = Vec::new();
+
+    for path in &toml_files {
+        let is_config_toml = path
+            .file_name()
+            .map_or(false, |n| n == "config.toml");
+
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read '{}': {}", path.display(), e))?;
+
+        if is_config_toml {
+            let mut config: Config = toml::from_str(&content)
+                .map_err(|e| format!("failed to parse '{}': {}", path.display(), e))?;
+
+            for endpoint in &config.endpoint {
+                endpoint.validate().map_err(|e| e)?;
+            }
+
+            general = Some(config.general);
+            endpoints.append(&mut config.endpoint);
+        } else {
+            let value: toml::Value = toml::from_str(&content)
+                .map_err(|e| format!("failed to parse '{}': {}", path.display(), e))?;
+            if let toml::Value::Table(table) = &value {
+                if table.contains_key("general") {
+                    return Err(format!(
+                        "'{}' must not contain [general] section. Only config.toml can define [general].",
+                        path.display()
+                    ));
+                }
+            }
+
+            let partial: EndpointOnlyConfig = toml::from_str(&content)
+                .map_err(|e| format!("failed to parse '{}': {}", path.display(), e))?;
+
+            for endpoint in &partial.endpoint {
+                endpoint.validate().map_err(|e| e)?;
+            }
+
+            endpoints.extend(partial.endpoint);
+        }
+    }
+
+    let general = general.unwrap_or_default();
+    Ok(Config { general, endpoint: endpoints })
 }
 
-pub fn load_from_str(content: &str) -> Result<Config, String> {
+#[cfg(test)]
+fn load_from_str(content: &str) -> Result<Config, String> {
     let config: Config = toml::from_str(content)
         .map_err(|e| format!("failed to parse config: {}", e))?;
 
@@ -236,6 +311,14 @@ pub fn load_from_str(content: &str) -> Result<Config, String> {
     }
 
     Ok(config)
+}
+
+/// Minimal struct for parsing .toml files that may only contain [[endpoint]] entries.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EndpointOnlyConfig {
+    #[serde(default)]
+    pub endpoint: Vec<EndpointConfig>,
 }
 
 #[cfg(test)]
@@ -290,5 +373,104 @@ timeout_ms = 5000
         assert_eq!(general.default_interval_secs, 30);
         assert_eq!(general.default_timeout_ms, 5000);
         assert!(general.extra_labels.is_empty());
+    }
+
+    #[test]
+    fn test_load_from_dir_basic() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[general]
+port = 9191
+default_interval_secs = 60
+
+[[endpoint]]
+target = "192.168.1.1:443"
+protocol = "tcp"
+interval_secs = 15
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join("dns.toml"),
+            r#"
+[[endpoint]]
+target = "8.8.8.8"
+protocol = "icmp"
+timeout_ms = 1000
+"#,
+        )
+        .unwrap();
+
+        let config = load_from_dir(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.general.port, 9191);
+        assert_eq!(config.general.default_interval_secs, 60);
+        assert_eq!(config.endpoint.len(), 2);
+        assert_eq!(config.endpoint[0].protocol, Protocol::Tcp);
+        assert_eq!(config.endpoint[1].protocol, Protocol::Icmp);
+    }
+
+    #[test]
+    fn test_load_from_dir_rejects_general_in_other_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[general]
+port = 9191
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join("bad.toml"),
+            r#"
+[general]
+port = 9999
+
+[[endpoint]]
+target = "8.8.8.8"
+protocol = "icmp"
+"#,
+        )
+        .unwrap();
+
+        let result = load_from_dir(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("general"));
+    }
+
+    #[test]
+    fn test_load_from_dir_no_config_toml_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("app.toml"),
+            r#"
+[[endpoint]]
+target = "8.8.8.8:53"
+protocol = "udp"
+"#,
+        )
+        .unwrap();
+
+        let config = load_from_dir(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(config.general.port, 9191);
+        assert_eq!(config.endpoint.len(), 1);
+        assert_eq!(config.endpoint[0].protocol, Protocol::Udp);
+    }
+
+    #[test]
+    fn test_load_from_dir_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = load_from_dir(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.general.port, 9191);
+        assert!(config.endpoint.is_empty());
     }
 }
