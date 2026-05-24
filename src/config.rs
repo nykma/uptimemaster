@@ -10,6 +10,8 @@ pub struct Config {
     pub general: GeneralConfig,
     #[serde(default)]
     pub endpoint: Vec<EndpointConfig>,
+    #[serde(default)]
+    pub dns: Option<DnsConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -102,6 +104,23 @@ impl std::fmt::Display for Protocol {
             Protocol::Arp => write!(f, "arp"),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum DnsProtocol {
+    Udp,
+    Tcp,
+    Doh,
+    Dot,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DnsConfig {
+    /// DNS server. For UDP/TCP/DoT: an IP or hostname with optional port.
+    /// For DoH: a full URL, e.g. "https://doh.pub/dns-query".
+    pub server: String,
+    pub protocol: DnsProtocol,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -254,6 +273,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
     });
 
     let mut general: Option<GeneralConfig> = None;
+    let mut dns: Option<DnsConfig> = None;
     let mut endpoints: Vec<EndpointConfig> = Vec::new();
 
     for path in &toml_files {
@@ -273,6 +293,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
             }
 
             general = Some(config.general);
+            dns = config.dns;
             endpoints.append(&mut config.endpoint);
         } else {
             let value: toml::Value = toml::from_str(&content)
@@ -281,6 +302,12 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
                 if table.contains_key("general") {
                     return Err(format!(
                         "'{}' must not contain [general] section. Only config.toml can define [general].",
+                        path.display()
+                    ));
+                }
+                if table.contains_key("dns") {
+                    return Err(format!(
+                        "'{}' must not contain [dns] section. Only config.toml can define [dns].",
                         path.display()
                     ));
                 }
@@ -298,7 +325,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
     }
 
     let general = general.unwrap_or_default();
-    Ok(Config { general, endpoint: endpoints })
+    Ok(Config { general, dns, endpoint: endpoints })
 }
 
 #[cfg(test)]
@@ -464,6 +491,92 @@ protocol = "udp"
         assert_eq!(config.general.port, 9191);
         assert_eq!(config.endpoint.len(), 1);
         assert_eq!(config.endpoint[0].protocol, Protocol::Udp);
+    }
+
+    #[test]
+    fn test_parse_dns_config() {
+        let config = load_from_str(
+            r#"
+[dns]
+server = "1.1.1.1"
+protocol = "udp"
+
+[[endpoint]]
+target = "example.com"
+protocol = "http"
+"#,
+        )
+        .unwrap();
+
+        let dns = config.dns.unwrap();
+        assert_eq!(dns.server, "1.1.1.1");
+        assert_eq!(dns.protocol, DnsProtocol::Udp);
+    }
+
+    #[test]
+    fn test_parse_dns_config_doh() {
+        let config = load_from_str(
+            r#"
+[dns]
+server = "https://doh.pub/dns-query"
+protocol = "doh"
+
+[[endpoint]]
+target = "example.com"
+protocol = "http"
+"#,
+        )
+        .unwrap();
+
+        let dns = config.dns.unwrap();
+        assert_eq!(dns.server, "https://doh.pub/dns-query");
+        assert_eq!(dns.protocol, DnsProtocol::Doh);
+    }
+
+    #[test]
+    fn test_no_dns_config_uses_none() {
+        let config = load_from_str(
+            r#"
+[[endpoint]]
+target = "example.com"
+protocol = "http"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.dns.is_none());
+    }
+
+    #[test]
+    fn test_load_from_dir_rejects_dns_in_other_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[general]
+port = 9191
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join("bad.toml"),
+            r#"
+[dns]
+server = "1.1.1.1"
+protocol = "udp"
+
+[[endpoint]]
+target = "8.8.8.8"
+protocol = "icmp"
+"#,
+        )
+        .unwrap();
+
+        let result = load_from_dir(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("dns"));
     }
 
     #[test]

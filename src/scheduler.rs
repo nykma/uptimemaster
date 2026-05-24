@@ -12,22 +12,33 @@ use crate::config::{Config, EndpointConfig, Protocol};
 use crate::metrics::Metrics;
 use crate::probe;
 use crate::resolver;
+use hickory_resolver::TokioResolver;
 
 pub struct Scheduler {
     handles: Vec<JoinHandle<()>>,
     metrics: Arc<Metrics>,
     semaphore: Arc<Semaphore>,
     config: Config,
+    resolver: TokioResolver,
 }
 
 impl Scheduler {
-    pub fn new(config: Config, metrics: Arc<Metrics>) -> Self {
+    pub async fn new(config: Config, metrics: Arc<Metrics>) -> Self {
         let max_concurrent = config.general.max_concurrent_probes;
+        let resolver = resolver::build_resolver(config.dns.as_ref())
+            .await
+            .unwrap_or_else(|| {
+                warn!("Failed to build custom DNS resolver, falling back to system default");
+                TokioResolver::builder_tokio()
+                    .expect("Failed to create fallback DNS resolver")
+                    .build()
+            });
         Self {
             handles: Vec::new(),
             metrics,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             config,
+            resolver,
         }
     }
 
@@ -46,6 +57,7 @@ impl Scheduler {
                 Duration::from_secs(interval),
                 Duration::from_millis(timeout),
                 self.config.general.extra_labels.clone(),
+                self.resolver.clone(),
             );
 
             self.handles.push(handle);
@@ -78,6 +90,7 @@ fn spawn_probe_task(
     interval: Duration,
     timeout: Duration,
     general_extra_labels: HashMap<String, String>,
+    resolver: TokioResolver,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval_timer = time::interval(interval);
@@ -94,7 +107,7 @@ fn spawn_probe_task(
                 }
             };
 
-            let results = run_probe(&endpoint, timeout).await;
+            let results = run_probe(&resolver, &endpoint, timeout).await;
 
             let mut merged_labels = general_extra_labels.clone();
             for (k, v) in &endpoint.extra_labels {
@@ -109,8 +122,12 @@ fn spawn_probe_task(
     })
 }
 
-async fn run_probe(endpoint: &EndpointConfig, timeout: Duration) -> Vec<probe::ProbeResult> {
-    let targets = resolver::resolve_endpoint(endpoint).await;
+async fn run_probe(
+    resolver: &TokioResolver,
+    endpoint: &EndpointConfig,
+    timeout: Duration,
+) -> Vec<probe::ProbeResult> {
+    let targets = resolver::resolve_endpoint(resolver, endpoint).await;
 
     if targets.is_empty() && endpoint.protocol != Protocol::Arp {
         warn!("No resolved targets for {}", endpoint.target);

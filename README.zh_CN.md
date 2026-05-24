@@ -61,14 +61,14 @@ sudo setcap cap_net_raw+ep ./uptimemaster
 
 uptimemaster 从一个配置目录中加载所有 `.toml` 文件（默认路径 `/config`）。
 
-- **`config.toml`** 最先被处理，且是**唯一**允许定义 `[general]` 的文件。其他文件只能包含 `[[endpoint]]` 条目。
-- 其他 `.toml` 文件（如 `dns.toml`、`web.toml`）按文件名排序后合并其端点。
+- **`config.toml`** 最先被处理，且是**唯一**允许定义 `[general]` 和 `[dns]` 的文件。其他文件只能包含 `[[endpoint]]` 条目。
+- 其他 `.toml` 文件（如 `servers.toml`、`web.toml`）按文件名排序后合并其端点。
 - 热加载：目录中任意 `.toml` 文件的变更都会触发配置重载。
 
 完整配置项及示例见 [`config.sample.toml`](config.sample.toml)，这里快速概览：
 
 ```toml
-# config/config.toml — 唯一可以写 [general] 的文件
+# config/config.toml — 唯一可以写 [general] 和 [dns] 的文件
 [general]
 port = 9191
 max_concurrent_probes = 50
@@ -76,11 +76,15 @@ default_interval_secs = 30
 default_timeout_ms = 5000
 extra_labels = { node = "my_home" }
 
+[dns]
+server = "1.1.1.1"
+protocol = "udp"
+
 [[endpoint]]
 target = "192.168.1.1:80"
 protocol = "tcp"
 
-# config/dns.toml — 只放 endpoint
+# config/servers.toml — 只放 endpoint
 [[endpoint]]
 target = "8.8.4.4"
 protocol = "icmp"
@@ -94,7 +98,31 @@ expected_status = [200]
 ```
 
 - `[general]` — 全局默认值（指标端口、并发数、探测间隔、超时时间）。**仅允许写在 `config.toml`。**
+- `[dns]` — 自定义 DNS 解析器配置（可选）。**仅允许写在 `config.toml`。**
 - `[[endpoint]]` — 每个端点一个配置块。必填项：`target`、`protocol`，其余字段均有合理默认值。
+
+### DNS 配置（`[dns]`）
+
+默认情况下，uptimemaster 使用系统 DNS 解析器。你可以通过自定义 DNS 服务器来覆盖：
+
+```toml
+# config/config.toml
+[dns]
+server = "1.1.1.1"       # IP 或主机名，可选 :port
+protocol = "udp"          # udp | tcp | dot | doh
+```
+
+| 协议 | 说明 | 默认端口 | `server` 示例 |
+|---|---|---|---|
+| `udp` | 标准 UDP DNS | 53 | `1.1.1.1` 或 `8.8.8.8:53` |
+| `tcp` | TCP DNS | 53 | `8.8.8.8:53` |
+| `dot` | DNS over TLS (DoT) | 853 | `1.1.1.1:853` |
+| `doh` | DNS over HTTPS (DoH) | 443 | `https://doh.pub/dns-query` |
+
+- 只支持指定**单个** DNS 服务器（不支持多个）。
+- DoT/DoH 使用主机名时，主机名将作为 TLS SNI。
+- DoH 必须填写完整 URL（如 `https://doh.pub/dns-query`）。
+- 不配置 `[dns]` 则使用系统解析器。
 
 ## 导出的指标
 

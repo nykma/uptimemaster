@@ -50,7 +50,7 @@ async fn main() {
     }
 
     let metrics = Arc::new(metrics::Metrics::new());
-    let mut sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone());
+    let mut sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone()).await;
     sched.start().await;
 
     let metrics_port = initial_config.general.port;

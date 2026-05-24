@@ -5,6 +5,28 @@ default_interval_secs = 30
 default_timeout_ms = 5000
 extra_labels = { node = "my_home" }
 
+# -----------------------------------------------------------------
+# DNS resolver configuration (optional)
+# -----------------------------------------------------------------
+# Uncomment to use a custom DNS server instead of the system resolver.
+# Only a single server is supported. Allowed protocols: udp, tcp, dot, doh
+#
+# [dns]
+# server = "1.1.1.1"                     # DNS over UDP (default port 53)
+# protocol = "udp"
+#
+# [dns]
+# server = "8.8.8.8:53"                  # DNS over TCP
+# protocol = "tcp"
+#
+# [dns]
+# server = "1.1.1.1:853"                 # DNS over TLS (DoT)
+# protocol = "dot"
+#
+# [dns]
+# server = "https://doh.pub/dns-query"   # DNS over HTTPS (DoH, full URL required)
+# protocol = "doh"
+
 # TCP probe - check if a port is reachable
 [[endpoint]]
 target = "192.168.1.1:80"

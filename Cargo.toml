@@ -16,7 +16,7 @@ pnet = "0.35"
 pnet_base = "0.35"
 pnet_datalink = "0.35"
 notify = "7"
-hickory-resolver = "0.25"
+hickory-resolver = { version = "0.25", default-features = true, features = ["tokio", "tls-aws-lc-rs", "https-aws-lc-rs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }

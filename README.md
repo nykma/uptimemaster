@@ -61,14 +61,14 @@ If `CAP_NET_RAW` is missing, uptimemaster prints a warning at startup and ICMP p
 
 uptimemaster reads all `.toml` files from a configuration directory (default: `/config`).
 
-- **`config.toml`** is processed first and is the **only** file that may define `[general]`. All other files must contain only `[[endpoint]]` entries.
-- Other `.toml` files (e.g. `dns.toml`, `web.toml`) are read in alphabetical order and their endpoints are merged.
+- **`config.toml`** is processed first and is the **only** file that may define `[general]` and `[dns]`. All other files must contain only `[[endpoint]]` entries.
+- Other `.toml` files (e.g. `servers.toml`, `web.toml`) are read in alphabetical order and their endpoints are merged.
 - Hot-reloading: changes to any `.toml` file in the directory trigger a config reload.
 
 See [`config.sample.toml`](config.sample.toml) for all options and real-world examples. Quick overview:
 
 ```toml
-# config/config.toml — the only file that can have [general]
+# config/config.toml — the only file that can have [general] and [dns]
 [general]
 port = 9191
 max_concurrent_probes = 50
@@ -76,11 +76,15 @@ default_interval_secs = 30
 default_timeout_ms = 5000
 extra_labels = { node = "my_home" }
 
+[dns]
+server = "1.1.1.1"
+protocol = "udp"
+
 [[endpoint]]
 target = "192.168.1.1:80"
 protocol = "tcp"
 
-# config/dns.toml — endpoint-only file
+# config/servers.toml — endpoint-only file
 [[endpoint]]
 target = "8.8.4.4"
 protocol = "icmp"
@@ -94,7 +98,31 @@ expected_status = [200]
 ```
 
 - `[general]` — global defaults (metrics port, concurrency, probe interval, timeout). **Only allowed in `config.toml`.**
+- `[dns]` — custom DNS resolver configuration (optional). **Only allowed in `config.toml`.**
 - `[[endpoint]]` — one entry per target. Required fields: `target`, `protocol`. All other fields have sensible defaults.
+
+### DNS Configuration (`[dns]`)
+
+By default, uptimemaster uses the system DNS resolver. You can override this with a custom DNS server:
+
+```toml
+# config/config.toml
+[dns]
+server = "1.1.1.1"       # IP or hostname, optional :port
+protocol = "udp"          # udp | tcp | dot | doh
+```
+
+| Protocol | Description | Default Port | `server` Example |
+|---|---|---|---|
+| `udp` | Standard DNS over UDP | 53 | `1.1.1.1` or `8.8.8.8:53` |
+| `tcp` | DNS over TCP | 53 | `8.8.8.8:53` |
+| `dot` | DNS over TLS (DoT) | 853 | `1.1.1.1:853` |
+| `doh` | DNS over HTTPS (DoH) | 443 | `https://doh.pub/dns-query` |
+
+- Only a **single** DNS server is supported (no fallback list).
+- For DoT/DoH with a hostname, the hostname is used as TLS SNI.
+- For DoH, the full URL must be specified (e.g. `https://doh.pub/dns-query`).
+- Omitting `[dns]` entirely uses the system resolver.
 
 ## Exported Metrics
 
