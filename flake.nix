@@ -92,30 +92,6 @@
           default = uptimemaster;
           inherit uptimemaster;
         }
-        // inputs.nixpkgs.lib.optionalAttrs (inputs.nixpkgs.lib.hasSuffix "linux" system) {
-          docker-image = pkgs.dockerTools.buildImage {
-            name = "uptimemaster";
-            tag = "latest";
-
-            copyToRoot = [
-              uptimemaster
-              pkgs.cacert
-            ];
-
-            config = {
-              Cmd = [ "/bin/uptimemaster" "-c" "/config" ];
-              ExposedPorts = {
-                "9191/tcp" = { };
-              };
-              Env = [
-                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-              Volumes = {
-                "/config" = { };
-              };
-            };
-          };
-        }
       );
 
       formatter = forEachSupportedSystem ({ pkgs, ... }: pkgs.nixfmt);

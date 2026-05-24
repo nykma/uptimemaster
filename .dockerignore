@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+*.nix
+flake.lock
+.envrc
+.direnv/
+docker-compose.yml
+Dockerfile
+.dockerignore
+*.md
+result
