@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
@@ -13,6 +14,7 @@ pub struct Metrics {
     um_request_rtt: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
     um_ssl_duration: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
     um_tls_cert_expiry: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
+    um_probes_total: Family<Vec<(String, String)>, Counter>,
 }
 
 impl Metrics {
@@ -23,6 +25,7 @@ impl Metrics {
         let um_request_rtt = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         let um_ssl_duration = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         let um_tls_cert_expiry = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
+        let um_probes_total = Family::<Vec<(String, String)>, Counter>::default();
 
         registry.register(
             "um_up",
@@ -44,6 +47,11 @@ impl Metrics {
             "Unix timestamp when the TLS certificate expires (0 if not applicable or probe failed)",
             um_tls_cert_expiry.clone(),
         );
+        registry.register(
+            "um_probes_total",
+            "Total number of probe attempts, labeled by status (success or failure)",
+            um_probes_total.clone(),
+        );
 
         Self {
             registry: Arc::new(registry),
@@ -51,6 +59,7 @@ impl Metrics {
             um_request_rtt,
             um_ssl_duration,
             um_tls_cert_expiry,
+            um_probes_total,
         }
     }
 
@@ -82,6 +91,13 @@ impl Metrics {
 
         let cert_gauge = self.um_tls_cert_expiry.get_or_create(&labels);
         cert_gauge.set(r.cert_expiry_secs.unwrap_or(0.0));
+
+        // Counter: clone labels and add status dimension
+        let status = if r.up { "success" } else { "failure" };
+        let mut counter_labels = labels.clone();
+        counter_labels.push(("status".to_string(), status.to_string()));
+        counter_labels.sort_by(|a, b| a.0.cmp(&b.0));
+        self.um_probes_total.get_or_create(&counter_labels).inc();
     }
 
     pub fn registry(&self) -> Arc<Registry> {
