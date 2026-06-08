@@ -43,7 +43,7 @@ impl ConfigWatcher {
         match self.rx.recv() {
             Ok(Ok(event)) => {
                 let is_toml_change = event.paths.iter().any(|p| {
-                    p.extension().map_or(false, |ext| ext == "toml")
+                    p.extension().is_some_and(|ext| ext == "toml")
                 });
                 if !is_toml_change {
                     return false;

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 mod config;
@@ -50,8 +51,9 @@ async fn main() {
     }
 
     let metrics = Arc::new(metrics::Metrics::new());
-    let mut sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone()).await;
-    sched.start().await;
+    let sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone()).await;
+    let sched = Arc::new(RwLock::new(sched));
+    sched.write().await.start().await;
 
     let metrics_port = initial_config.general.port;
     let metrics_registry = metrics.registry();
@@ -60,8 +62,10 @@ async fn main() {
         start_metrics_server(metrics_port, metrics_registry).await;
     });
 
+    let config_path_for_watcher = config_path.clone();
+    let sched_for_watcher = sched.clone();
     let watcher_handle = tokio::spawn(async move {
-        let mut watcher = match watcher::ConfigWatcher::new(&config_path) {
+        let mut watcher = match watcher::ConfigWatcher::new(&config_path_for_watcher) {
             Ok(w) => w,
             Err(e) => {
                 error!("Failed to create config watcher: {}", e);
@@ -71,15 +75,18 @@ async fn main() {
 
         loop {
             if watcher.wait_for_change() {
+                // Brief delay to let the filesystem settle (e.g. atomic writes)
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                match config::load_from_dir(&config_path) {
+                match config::load_from_dir(&config_path_for_watcher) {
                     Ok(new_config) => {
                         info!("Config reloaded successfully");
                         for warning in validate_icmp_privileges(&new_config) {
                             warn!("{}", warning);
                         }
-                        // v1.0: config hot-reload not yet wired to scheduler; restart required for full effect
+                        let mut scheduler = sched_for_watcher.write().await;
+                        scheduler.reload(new_config).await;
+                        info!("Scheduler restarted with new config");
                     }
                     Err(e) => {
                         error!("Failed to reload config: {}", e);
@@ -90,20 +97,36 @@ async fn main() {
         }
     });
 
+    // Wait for ctrl_c (SIGTERM/SIGINT), then clean up.
     tokio::select! {
-        _ = server_handle => info!("Metrics server stopped"),
-        _ = watcher_handle => info!("Config watcher stopped"),
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received shutdown signal, draining connections...");
+        }
+        ret = server_handle => {
+            match ret {
+                Ok(()) => info!("Metrics server shut down"),
+                Err(e) => error!("Metrics server task panicked: {}", e),
+            }
+        }
+        ret = watcher_handle => {
+            match ret {
+                Ok(()) => info!("Config watcher stopped"),
+                Err(e) => error!("Config watcher task panicked: {}", e),
+            }
+        }
     }
+
+    // Stop all probe tasks
+    sched.write().await.stop().await;
+    info!("All probe tasks stopped. Goodbye.");
 }
 
 fn validate_icmp_privileges(config: &config::Config) -> Vec<String> {
     let mut warnings = Vec::new();
 
     let has_icmp = config.endpoint.iter().any(|e| e.protocol == config::Protocol::Icmp);
-    if has_icmp {
-        if !has_net_raw_capability() {
-            warnings.push("ICMP probes configured but CAP_NET_RAW capability not detected. ICMP probes may fail. Run with --cap-add=NET_RAW or as root.".to_string());
-        }
+    if has_icmp && !has_net_raw_capability() {
+        warnings.push("ICMP probes configured but CAP_NET_RAW capability not detected. ICMP probes may fail. Run with --cap-add=NET_RAW or as root.".to_string());
     }
 
     warnings
@@ -134,38 +157,49 @@ fn has_net_raw_capability() -> bool {
     }
 }
 
-async fn start_metrics_server(port: u16, registry: Arc<prometheus_client::registry::Registry>) {
+async fn start_metrics_server(
+    port: u16,
+    registry: Arc<prometheus_client::registry::Registry>,
+) {
     use axum::response::IntoResponse;
     use axum::routing::get;
     use axum::Router;
 
-    let app = Router::new().route("/metrics", get(move || {
-        let registry = registry.clone();
-        async move {
-            let mut buffer = String::new();
-            match prometheus_client::encoding::text::encode(&mut buffer, &registry) {
-                Ok(()) => (
-                    axum::http::StatusCode::OK,
-                    [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
-                    buffer,
-                ).into_response(),
-                Err(e) => {
-                    tracing::error!("Failed to encode metrics: {}", e);
-                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to encode metrics").into_response()
+    let registry_metrics = registry.clone();
+    let app = Router::new()
+        .route("/metrics", get(move || {
+            let registry = registry_metrics.clone();
+            async move {
+                let mut buffer = String::new();
+                match prometheus_client::encoding::text::encode(&mut buffer, &registry) {
+                    Ok(()) => (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                        buffer,
+                    ).into_response(),
+                    Err(e) => {
+                        tracing::error!("Failed to encode metrics: {}", e);
+                        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to encode metrics").into_response()
+                    }
                 }
             }
-        }
-    }));
+        }))
+        .route("/health", get(|| async {
+            (axum::http::StatusCode::OK, "OK")
+        }));
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     info!("Metrics server listening on {}", addr);
 
-    if let Err(e) = axum::serve(
-        tokio::net::TcpListener::bind(addr).await.unwrap(),
-        app,
-    )
-    .await
-    {
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            error!("Failed to bind metrics server on {}: {}", addr, e);
+            return;
+        }
+    };
+
+    if let Err(e) = axum::serve(listener, app).await {
         error!("Metrics server error: {}", e);
     }
 }

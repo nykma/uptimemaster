@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use crate::config::{HttpMethod, Protocol};
 use crate::probe::ProbeResult;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn probe_http(
     target: &str,
     ip: IpAddr,
@@ -27,7 +28,8 @@ pub async fn probe_http(
         }
     });
 
-    let client = match build_client(ip, actual_port, timeout_duration) {
+    let hostname = extract_hostname(target);
+    let client = match build_client(hostname.as_deref().unwrap_or(target), ip, actual_port, timeout_duration) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to build HTTP client: {}", e);
@@ -117,12 +119,18 @@ pub async fn probe_http(
     }
 }
 
+/// Build a reqwest Client that connects to `ip:port` but uses `host` for TLS SNI
+/// and the HTTP Host header. This ensures custom DNS resolution is respected
+/// and `probe_all` works correctly for HTTP/HTTPS targets.
 fn build_client(
-    _ip: IpAddr,
-    _port: u16,
+    host: &str,
+    ip: IpAddr,
+    port: u16,
     timeout_duration: Duration,
 ) -> Result<reqwest::Client, String> {
+    let addr = SocketAddr::new(ip, port);
     reqwest::ClientBuilder::new()
+        .resolve_to_addrs(host, &[addr])
         .timeout(timeout_duration)
         .danger_accept_invalid_certs(false)
         .build()

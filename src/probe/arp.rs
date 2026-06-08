@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use pnet_base::MacAddr;
@@ -43,12 +43,31 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
         }
     };
 
-    let result = send_arp_request(&interface, &mac, timeout_duration).await;
+    // Extract owned values before moving into spawn_blocking
+    let iface_name = interface.name.clone();
+    let src_mac = interface.mac.unwrap_or(MacAddr::broadcast());
+    let src_ip = interface
+        .ips
+        .iter()
+        .find(|ip| matches!(ip.ip(), IpAddr::V4(_)))
+        .map(|ip| {
+            if let IpAddr::V4(v4) = ip.ip() {
+                v4
+            } else {
+                Ipv4Addr::UNSPECIFIED
+            }
+        })
+        .unwrap_or(Ipv4Addr::UNSPECIFIED);
+
+    let result = tokio::task::spawn_blocking(move || {
+        send_arp_request(&iface_name, &src_mac, src_ip, &mac, timeout_duration)
+    })
+    .await;
 
     let rtt = start.elapsed().as_secs_f64() * 1000.0;
 
     match result {
-        Ok(true) => ProbeResult {
+        Ok(Ok(true)) => ProbeResult {
             up: true,
             rtt_ms: Some(rtt),
             ssl_duration_ms: None,
@@ -95,38 +114,31 @@ fn find_interface_for_arp() -> Option<pnet_datalink::NetworkInterface> {
     })
 }
 
-async fn send_arp_request(
-    interface: &pnet_datalink::NetworkInterface,
+/// Synchronous ARP request. Called from `spawn_blocking` to avoid blocking the async runtime.
+fn send_arp_request(
+    iface_name: &str,
+    src_mac: &MacAddr,
+    src_ip: Ipv4Addr,
     target_mac: &MacAddr,
     timeout_duration: Duration,
 ) -> Result<bool, String> {
     use pnet_datalink::Channel::Ethernet;
 
-    let src_mac = interface.mac.unwrap_or_else(MacAddr::broadcast);
+    let interface = pnet_datalink::interfaces()
+        .into_iter()
+        .find(|iface| iface.name == iface_name)
+        .ok_or_else(|| "Interface disappeared".to_string())?;
 
-    let (mut tx, mut rx) = match pnet_datalink::channel(interface, Default::default()) {
+    let (mut tx, mut rx) = match pnet_datalink::channel(&interface, Default::default()) {
         Ok(Ethernet(tx, rx)) => (tx, rx),
         Ok(_) => return Err("Unsupported channel type".to_string()),
         Err(e) => return Err(format!("Failed to create channel: {}", e)),
     };
 
-    let src_ip = interface
-        .ips
-        .iter()
-        .find(|ip| matches!(ip.ip(), IpAddr::V4(_)))
-        .map(|ip| {
-            if let IpAddr::V4(v4) = ip.ip() {
-                v4
-            } else {
-                std::net::Ipv4Addr::UNSPECIFIED
-            }
-        })
-        .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-
     let mut packet_buf = [0u8; 42];
     build_arp_packet(
         &mut packet_buf,
-        &src_mac,
+        src_mac,
         &MacAddr::broadcast(),
         target_mac,
         src_ip,
@@ -149,14 +161,14 @@ async fn send_arp_request(
                 if packet.len() < 42 {
                     continue;
                 }
-                if packet[12] == 0x08 && packet[13] == 0x06 {
-                    if packet[20] == 0x00 && packet[21] == 0x02 {
-                        let sender_mac = MacAddr::new(
-                            packet[22], packet[23], packet[24], packet[25], packet[26], packet[27],
-                        );
-                        if &sender_mac == target_mac {
-                            return Ok(true);
-                        }
+                if packet[12] == 0x08 && packet[13] == 0x06
+                    && packet[20] == 0x00 && packet[21] == 0x02
+                {
+                    let sender_mac = MacAddr::new(
+                        packet[22], packet[23], packet[24], packet[25], packet[26], packet[27],
+                    );
+                    if &sender_mac == target_mac {
+                        return Ok(true);
                     }
                 }
             }
@@ -170,7 +182,7 @@ fn build_arp_packet(
     src_mac: &MacAddr,
     dst_mac: &MacAddr,
     target_mac: &MacAddr,
-    src_ip: std::net::Ipv4Addr,
+    src_ip: Ipv4Addr,
 ) {
     buf[0..6].copy_from_slice(&[
         dst_mac.0, dst_mac.1, dst_mac.2, dst_mac.3, dst_mac.4, dst_mac.5,

@@ -20,6 +20,8 @@ pub struct Scheduler {
     semaphore: Arc<Semaphore>,
     config: Config,
     resolver: TokioResolver,
+    /// System resolver used as fallback when custom DNS returns no results.
+    fallback_resolver: Option<TokioResolver>,
 }
 
 impl Scheduler {
@@ -33,12 +35,28 @@ impl Scheduler {
                     .expect("Failed to create fallback DNS resolver")
                     .build()
             });
+
+        // Build a system resolver for fallback. Only needed when a custom DNS
+        // server is configured (otherwise the primary resolver is already system).
+        let fallback_resolver = if config.dns.is_some() {
+            match TokioResolver::builder_tokio() {
+                Ok(builder) => Some(builder.build()),
+                Err(e) => {
+                    warn!("Failed to build system fallback DNS resolver: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             handles: Vec::new(),
             metrics,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             config,
             resolver,
+            fallback_resolver,
         }
     }
 
@@ -58,6 +76,7 @@ impl Scheduler {
                 Duration::from_millis(timeout),
                 self.config.general.extra_labels.clone(),
                 self.resolver.clone(),
+                self.fallback_resolver.clone(),
             );
 
             self.handles.push(handle);
@@ -77,12 +96,38 @@ impl Scheduler {
     #[allow(dead_code)]
     pub async fn reload(&mut self, config: Config) {
         self.stop().await;
+
+        // Rebuild resolver in case DNS config changed
+        let resolver = resolver::build_resolver(config.dns.as_ref())
+            .await
+            .unwrap_or_else(|| {
+                warn!("Failed to build custom DNS resolver, falling back to system default");
+                TokioResolver::builder_tokio()
+                    .expect("Failed to create fallback DNS resolver")
+                    .build()
+            });
+
+        let fallback_resolver = if config.dns.is_some() {
+            match TokioResolver::builder_tokio() {
+                Ok(builder) => Some(builder.build()),
+                Err(e) => {
+                    warn!("Failed to build system fallback DNS resolver: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         self.config = config;
+        self.resolver = resolver;
+        self.fallback_resolver = fallback_resolver;
         self.semaphore = Arc::new(Semaphore::new(self.config.general.max_concurrent_probes));
         self.start().await;
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_probe_task(
     endpoint: EndpointConfig,
     metrics: Arc<Metrics>,
@@ -91,6 +136,7 @@ fn spawn_probe_task(
     timeout: Duration,
     general_extra_labels: HashMap<String, String>,
     resolver: TokioResolver,
+    fallback_resolver: Option<TokioResolver>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval_timer = time::interval(interval);
@@ -107,7 +153,7 @@ fn spawn_probe_task(
                 }
             };
 
-            let results = run_probe(&resolver, &endpoint, timeout).await;
+            let results = run_probe(&resolver, fallback_resolver.as_ref(), &endpoint, timeout).await;
 
             let mut merged_labels = general_extra_labels.clone();
             for (k, v) in &endpoint.extra_labels {
@@ -124,10 +170,11 @@ fn spawn_probe_task(
 
 async fn run_probe(
     resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
     endpoint: &EndpointConfig,
     timeout: Duration,
 ) -> Vec<probe::ProbeResult> {
-    let targets = resolver::resolve_endpoint(resolver, endpoint).await;
+    let targets = resolver::resolve_endpoint(resolver, fallback_resolver, endpoint).await;
 
     if targets.is_empty() && endpoint.protocol != Protocol::Arp {
         warn!("No resolved targets for {}", endpoint.target);

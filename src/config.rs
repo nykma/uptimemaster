@@ -196,13 +196,13 @@ impl EndpointConfig {
             ));
         }
 
-        if let Some(timeout) = self.timeout_ms {
-            if timeout == 0 {
-                return Err(format!(
-                    "endpoint '{}': timeout_ms must be greater than 0",
-                    self.target
-                ));
-            }
+        if let Some(timeout) = self.timeout_ms
+            && timeout == 0
+        {
+            return Err(format!(
+                "endpoint '{}': timeout_ms must be greater than 0",
+                self.target
+            ));
         }
 
         Ok(warnings)
@@ -257,7 +257,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "toml") {
+            if path.extension().is_some_and(|ext| ext == "toml") {
                 Some(path)
             } else {
                 None
@@ -268,7 +268,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
     toml_files.sort_by_key(|p| {
         let is_config = p
             .file_name()
-            .map_or(false, |n| n == "config.toml");
+            .is_some_and(|n| n == "config.toml");
         (if is_config { 0 } else { 1 }, p.file_name().map(|n| n.to_os_string()).unwrap_or_default())
     });
 
@@ -279,7 +279,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
     for path in &toml_files {
         let is_config_toml = path
             .file_name()
-            .map_or(false, |n| n == "config.toml");
+            .is_some_and(|n| n == "config.toml");
 
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read '{}': {}", path.display(), e))?;
@@ -289,7 +289,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
                 .map_err(|e| format!("failed to parse '{}': {}", path.display(), e))?;
 
             for endpoint in &config.endpoint {
-                endpoint.validate().map_err(|e| e)?;
+                endpoint.validate()?;
             }
 
             general = Some(config.general);
@@ -317,7 +317,7 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
                 .map_err(|e| format!("failed to parse '{}': {}", path.display(), e))?;
 
             for endpoint in &partial.endpoint {
-                endpoint.validate().map_err(|e| e)?;
+                endpoint.validate()?;
             }
 
             endpoints.extend(partial.endpoint);
@@ -334,7 +334,7 @@ fn load_from_str(content: &str) -> Result<Config, String> {
         .map_err(|e| format!("failed to parse config: {}", e))?;
 
     for endpoint in &config.endpoint {
-        endpoint.validate().map_err(|e| e)?;
+        endpoint.validate()?;
     }
 
     Ok(config)

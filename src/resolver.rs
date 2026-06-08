@@ -1,10 +1,15 @@
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::time::Duration;
 
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::TokioResolver;
 use tracing::warn;
+
+/// Per-call timeout for DNS lookups. Prevents a stuck DNS server from
+/// delaying the entire probe cycle indefinitely.
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 use crate::config::{EndpointConfig, Protocol, ResolvedTarget};
 use crate::config::{DnsConfig, DnsProtocol};
@@ -107,6 +112,7 @@ fn parse_dns_server<'a>(server: &'a str, protocol: &DnsProtocol) -> (&'a str, u1
 
 pub async fn resolve_endpoint(
     resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
     endpoint: &EndpointConfig,
 ) -> Vec<ResolvedTarget> {
     match endpoint.protocol {
@@ -119,13 +125,14 @@ pub async fn resolve_endpoint(
                 hide_ip_label: false,
             }]
         }
-        Protocol::Icmp => resolve_icmp_target(resolver, endpoint).await,
-        _ => resolve_tcp_udp_http_target(resolver, endpoint).await,
+        Protocol::Icmp => resolve_icmp_target(resolver, fallback_resolver, endpoint).await,
+        _ => resolve_tcp_udp_http_target(resolver, fallback_resolver, endpoint).await,
     }
 }
 
 async fn resolve_icmp_target(
     resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
     endpoint: &EndpointConfig,
 ) -> Vec<ResolvedTarget> {
     let target = &endpoint.target;
@@ -140,7 +147,7 @@ async fn resolve_icmp_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, target).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, target).await;
     if ips.is_empty() {
         warn!("ICMP target '{}' could not be resolved", target);
         return vec![];
@@ -169,13 +176,14 @@ async fn resolve_icmp_target(
 
 async fn resolve_tcp_udp_http_target(
     resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
     endpoint: &EndpointConfig,
 ) -> Vec<ResolvedTarget> {
     let target = &endpoint.target;
     let default_port = endpoint.protocol.default_port();
 
     if matches!(endpoint.protocol, Protocol::Http | Protocol::Https) {
-        return resolve_http_target(resolver, endpoint).await;
+        return resolve_http_target(resolver, fallback_resolver, endpoint).await;
     }
 
     let (host, port) = parse_host_port(target, default_port);
@@ -190,7 +198,7 @@ async fn resolve_tcp_udp_http_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, host).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, host).await;
     if ips.is_empty() {
         warn!("Target '{}' could not be resolved", target);
         return vec![];
@@ -219,6 +227,7 @@ async fn resolve_tcp_udp_http_target(
 
 async fn resolve_http_target(
     resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
     endpoint: &EndpointConfig,
 ) -> Vec<ResolvedTarget> {
     let target = &endpoint.target;
@@ -236,7 +245,7 @@ async fn resolve_http_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, &host).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, &host).await;
     if ips.is_empty() {
         warn!("HTTP target '{}' could not be resolved", target);
         return vec![];
@@ -263,15 +272,54 @@ async fn resolve_http_target(
     }
 }
 
-async fn resolve_hostname(resolver: &TokioResolver, hostname: &str) -> Vec<IpAddr> {
-    let mut results = Vec::new();
+async fn resolve_hostname(
+    resolver: &TokioResolver,
+    fallback_resolver: Option<&TokioResolver>,
+    hostname: &str,
+) -> Vec<IpAddr> {
+    let mut results = do_lookup(resolver, hostname).await;
 
-    if let Ok(response) = resolver.ipv4_lookup(hostname).await {
-        results.extend(response.into_iter().map(|r| IpAddr::V4(r.0)));
+    // Fall back to system resolver if custom DNS returned nothing
+    if results.is_empty()
+        && let Some(fallback) = fallback_resolver
+    {
+        warn!(
+            "Custom DNS returned no results for '{}', falling back to system resolver",
+            hostname
+        );
+        results = do_lookup(fallback, hostname).await;
     }
 
-    if let Ok(response) = resolver.ipv6_lookup(hostname).await {
-        results.extend(response.into_iter().map(|r| IpAddr::V6(r.0)));
+    results
+}
+
+async fn do_lookup(resolver: &TokioResolver, hostname: &str) -> Vec<IpAddr> {
+    let mut results = Vec::new();
+
+    let ipv4_fut = resolver.ipv4_lookup(hostname);
+    match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv4_fut).await {
+        Ok(Ok(response)) => {
+            results.extend(response.into_iter().map(|r| IpAddr::V4(r.0)));
+        }
+        Ok(Err(e)) => {
+            warn!("IPv4 lookup for '{}' failed: {}", hostname, e);
+        }
+        Err(_) => {
+            warn!("IPv4 lookup for '{}' timed out after {:?}", hostname, DNS_LOOKUP_TIMEOUT);
+        }
+    }
+
+    let ipv6_fut = resolver.ipv6_lookup(hostname);
+    match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv6_fut).await {
+        Ok(Ok(response)) => {
+            results.extend(response.into_iter().map(|r| IpAddr::V6(r.0)));
+        }
+        Ok(Err(e)) => {
+            warn!("IPv6 lookup for '{}' failed: {}", hostname, e);
+        }
+        Err(_) => {
+            warn!("IPv6 lookup for '{}' timed out after {:?}", hostname, DNS_LOOKUP_TIMEOUT);
+        }
     }
 
     results
