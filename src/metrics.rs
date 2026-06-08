@@ -12,6 +12,7 @@ pub struct Metrics {
     um_up: Family<Vec<(String, String)>, Gauge>,
     um_request_rtt: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
     um_ssl_duration: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
+    um_tls_cert_expiry: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
 }
 
 impl Metrics {
@@ -21,6 +22,7 @@ impl Metrics {
         let um_up = Family::<Vec<(String, String)>, Gauge>::default();
         let um_request_rtt = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         let um_ssl_duration = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
+        let um_tls_cert_expiry = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
 
         registry.register(
             "um_up",
@@ -37,12 +39,18 @@ impl Metrics {
             "TLS handshake duration in milliseconds",
             um_ssl_duration.clone(),
         );
+        registry.register(
+            "um_tls_cert_expiry_seconds",
+            "Unix timestamp when the TLS certificate expires (0 if not applicable or probe failed)",
+            um_tls_cert_expiry.clone(),
+        );
 
         Self {
             registry: Arc::new(registry),
             um_up,
             um_request_rtt,
             um_ssl_duration,
+            um_tls_cert_expiry,
         }
     }
 
@@ -71,6 +79,9 @@ impl Metrics {
 
         let ssl_gauge = self.um_ssl_duration.get_or_create(&labels);
         ssl_gauge.set(r.ssl_duration_ms.unwrap_or(0.0));
+
+        let cert_gauge = self.um_tls_cert_expiry.get_or_create(&labels);
+        cert_gauge.set(r.cert_expiry_secs.unwrap_or(0.0));
     }
 
     pub fn registry(&self) -> Arc<Registry> {
@@ -99,6 +110,7 @@ mod tests {
             up: true,
             rtt_ms: Some(42.5),
             ssl_duration_ms: None,
+            cert_expiry_secs: None,
             ip: IpAddr::from_str("192.168.1.1").unwrap(),
             port: Some(443),
             protocol: Protocol::Tcp,

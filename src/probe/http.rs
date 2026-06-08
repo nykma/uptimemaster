@@ -37,6 +37,7 @@ pub async fn probe_http(
                 up: false,
                 rtt_ms: None,
                 ssl_duration_ms: None,
+            cert_expiry_secs: None,
                 ip,
                 port: Some(actual_port),
                 protocol: Protocol::Http,
@@ -79,16 +80,20 @@ pub async fn probe_http(
                 Protocol::Http
             };
 
-            let ssl_duration_ms = if protocol == Protocol::Https {
-                measure_ssl_duration(ip, actual_port, target, timeout_duration).await
+            let (ssl_duration_ms, cert_expiry_secs) = if protocol == Protocol::Https {
+                match measure_tls(ip, actual_port, target, timeout_duration).await {
+                    Some((duration, cert)) => (Some(duration), cert),
+                    None => (None, None),
+                }
             } else {
-                None
+                (None, None)
             };
 
             ProbeResult {
                 up,
                 rtt_ms: Some(total_rtt),
                 ssl_duration_ms,
+                cert_expiry_secs,
                 ip,
                 port: Some(actual_port),
                 protocol,
@@ -109,6 +114,7 @@ pub async fn probe_http(
                 up: false,
                 rtt_ms: None,
                 ssl_duration_ms: None,
+            cert_expiry_secs: None,
                 ip,
                 port: Some(actual_port),
                 protocol,
@@ -137,12 +143,14 @@ fn build_client(
         .map_err(|e| format!("failed to build reqwest client: {}", e))
 }
 
-async fn measure_ssl_duration(
+/// Perform a TLS handshake to measure duration and extract certificate expiry.
+/// Returns `(duration_ms, cert_expiry_unix_seconds)` on success.
+async fn measure_tls(
     ip: IpAddr,
     port: u16,
     target: &str,
     timeout_duration: Duration,
-) -> Option<f64> {
+) -> Option<(f64, Option<f64>)> {
     use std::sync::Arc;
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
@@ -172,9 +180,36 @@ async fn measure_ssl_duration(
     let tls_result = connector.connect(server_name, tcp_stream).await;
 
     match tls_result {
-        Ok(_) => Some(start.elapsed().as_secs_f64() * 1000.0),
+        Ok(tls_stream) => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let cert_expiry = extract_cert_expiry(&tls_stream);
+            Some((duration_ms, cert_expiry))
+        }
         Err(e) => {
             tracing::debug!("TLS handshake to {}:{} failed: {}", ip, port, e);
+            None
+        }
+    }
+}
+
+/// Extract the `not_after` timestamp from the leaf certificate of a TLS connection.
+fn extract_cert_expiry(
+    tls_stream: &tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+) -> Option<f64> {
+    use x509_parser::prelude::*;
+
+    let (_, conn) = tls_stream.get_ref();
+    let certs = conn.peer_certificates()?;
+    let leaf_der = certs.first()?;
+
+    match X509Certificate::from_der(leaf_der.as_ref()) {
+        Ok((_, cert)) => {
+            let not_after = cert.validity().not_after;
+            // x509-parser returns ASN1Time; timestamp() gives Unix epoch seconds
+            Some(not_after.timestamp() as f64)
+        }
+        Err(e) => {
+            tracing::debug!("Failed to parse peer certificate: {}", e);
             None
         }
     }
