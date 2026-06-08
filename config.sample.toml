@@ -72,6 +72,26 @@ timeout_ms = 5000
 interval_secs = 60
 extra_labels = { type = "my_business", service = "httpbin" }
 
+# HTTP GET with response body exact match
+[[endpoint]]
+target = "https://api.example.com/health"
+protocol = "https"
+method = "get"
+expected_status = [200]
+expected_body = "ok" # Body must contain this string
+timeout_ms = 5000
+extra_labels = { type = "api", service = "example" }
+
+# HTTP GET with response body regex match
+[[endpoint]]
+target = "https://api.example.com/status"
+protocol = "https"
+method = "get"
+expected_status = [200]
+expected_body_regex = '^\{"status":"healthy".*\}$' # Body must match this regex
+timeout_ms = 5000
+extra_labels = { type = "api", service = "example" }
+
 # ICMP ping to a domain - resolves DNS, uses first IP by default
 [[endpoint]]
 target = "example.com"

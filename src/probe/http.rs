@@ -15,6 +15,8 @@ pub async fn probe_http(
     payload: &Option<String>,
     content_type: &str,
     expected_status: &[u16],
+    expected_body: &Option<String>,
+    expected_body_regex: &Option<String>,
     timeout_duration: Duration,
     target_label: String,
 ) -> ProbeResult {
@@ -72,7 +74,51 @@ pub async fn probe_http(
     match response {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let up = expected_status.contains(&status);
+            let mut up = expected_status.contains(&status);
+
+            // Body content check — only if status already passed and a body check is configured.
+            // We read the body once and run both the exact match and regex check against it.
+            if up && (expected_body.is_some() || expected_body_regex.is_some()) {
+                match resp.text().await {
+                    Ok(body) => {
+                        if let Some(expected) = expected_body
+                            && !body.contains(expected.as_str())
+                        {
+                            tracing::debug!(
+                                "HTTP body check failed: expected string not found in {}",
+                                target
+                            );
+                            up = false;
+                        }
+                        if up
+                            && let Some(pattern) = expected_body_regex
+                        {
+                            match regex::Regex::new(pattern) {
+                                Ok(re) => {
+                                    if !re.is_match(&body) {
+                                        tracing::debug!(
+                                            "HTTP body check failed: regex '{}' did not match for {}",
+                                            pattern, target
+                                        );
+                                        up = false;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Invalid regex '{}' for {} (should have been caught at config load): {}",
+                                        pattern, target, e
+                                    );
+                                    up = false;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to read HTTP response body for {}: {}", target, e);
+                        up = false;
+                    }
+                }
+            }
 
             let protocol = if target.starts_with("https://") {
                 Protocol::Https

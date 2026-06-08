@@ -46,6 +46,12 @@ pub struct EndpointConfig {
     /// Only for http/https. Defaults to [200].
     #[serde(default)]
     pub expected_status: Vec<u16>,
+    /// Only for http/https. If set, response body must contain this string.
+    #[serde(default)]
+    pub expected_body: Option<String>,
+    /// Only for http/https. If set, response body must match this regex.
+    #[serde(default)]
+    pub expected_body_regex: Option<String>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
     /// Only sent with POST method.
@@ -194,6 +200,31 @@ impl EndpointConfig {
                 "endpoint '{}': expected_status is only used for http/https, ignoring for {}",
                 self.target, self.protocol
             ));
+        }
+
+        if self.expected_body.is_some()
+            && !matches!(self.protocol, Protocol::Http | Protocol::Https)
+        {
+            warnings.push(format!(
+                "endpoint '{}': expected_body is only used for http/https, ignoring for {}",
+                self.target, self.protocol
+            ));
+        }
+
+        if let Some(ref pattern) = self.expected_body_regex {
+            if !matches!(self.protocol, Protocol::Http | Protocol::Https) {
+                warnings.push(format!(
+                    "endpoint '{}': expected_body_regex is only used for http/https, ignoring for {}",
+                    self.target, self.protocol
+                ));
+            }
+            // Validate regex syntax at config load time
+            regex::Regex::new(pattern).map_err(|e| {
+                format!(
+                    "endpoint '{}': invalid expected_body_regex '{}': {}",
+                    self.target, pattern, e
+                )
+            })?;
         }
 
         if let Some(timeout) = self.timeout_ms

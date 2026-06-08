@@ -2350,6 +2350,7 @@ dependencies = [
  "pnet_datalink",
  "prometheus-client",
  "rand 0.8.6",
+ "regex",
  "reqwest",
  "rustls",
  "rustls-pki-types",

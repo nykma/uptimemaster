@@ -224,6 +224,8 @@ async fn run_probe(
                         &endpoint.payload,
                         &endpoint.content_type,
                         &endpoint.effective_expected_status(),
+                        &endpoint.expected_body,
+                        &endpoint.expected_body_regex,
                         timeout,
                         target.original.clone(),
                     )
