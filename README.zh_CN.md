@@ -95,6 +95,15 @@ target = "https://example.com/health"
 protocol = "https"
 method = "get"
 expected_status = [200]
+expected_body = "ok"  # 可选：校验响应体内容
+
+# config/api.toml — 正则匹配响应体
+[[endpoint]]
+target = "https://api.example.com/status"
+protocol = "https"
+method = "get"
+expected_status = [200]
+expected_body_regex = '^\{"status":"healthy".*\}$'  # 可选：正则匹配响应体
 ```
 
 - `[general]` — 全局默认值（指标端口、并发数、探测间隔、超时时间）。**仅允许写在 `config.toml`。**
@@ -131,5 +140,7 @@ protocol = "udp"          # udp | tcp | dot | doh
 | `um_up` | Gauge | 目标可达则为 1，否则为 0 |
 | `um_request_rtt_seconds` | Gauge | 往返耗时（秒） |
 | `um_ssl_duration_seconds` | Gauge | TLS 握手耗时（仅 HTTPS） |
+| `um_tls_cert_expiry_seconds` | Gauge | TLS 证书过期 Unix 时间戳（不适用则为 0） |
+| `um_probes_total` | Counter | 探测总次数，带 `status="success"` 或 `status="failure"` 标签 |
 
 所有指标均带有 `target`、`ip`、`protocol`、`port` 以及用户自定义的 `extra_labels`。

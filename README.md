@@ -95,6 +95,15 @@ target = "https://example.com/health"
 protocol = "https"
 method = "get"
 expected_status = [200]
+expected_body = "ok"  # optional: verify response body
+
+# config/api.toml — with regex body check
+[[endpoint]]
+target = "https://api.example.com/status"
+protocol = "https"
+method = "get"
+expected_status = [200]
+expected_body_regex = '^\{"status":"healthy".*\}$'  # optional: match body against regex
 ```
 
 - `[general]` — global defaults (metrics port, concurrency, probe interval, timeout). **Only allowed in `config.toml`.**
@@ -131,5 +140,7 @@ protocol = "udp"          # udp | tcp | dot | doh
 | `um_up` | Gauge | 1 if the target is reachable, 0 otherwise |
 | `um_request_rtt_seconds` | Gauge | Round-trip time in seconds |
 | `um_ssl_duration_seconds` | Gauge | TLS handshake duration (HTTPS only) |
+| `um_tls_cert_expiry_seconds` | Gauge | Unix timestamp when the TLS certificate expires (0 if not applicable) |
+| `um_probes_total` | Counter | Total probe attempts, with `status="success"` or `status="failure"` label |
 
 All metrics carry `target`, `ip`, `protocol`, `port`, and any user-defined `extra_labels`.
