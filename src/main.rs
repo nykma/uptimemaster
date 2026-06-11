@@ -51,6 +51,13 @@ async fn main() {
     }
 
     let metrics = Arc::new(metrics::Metrics::new());
+
+    // Set build info at startup
+    metrics.set_build_info(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("BUILD_COMMIT").unwrap_or("unknown"),
+    );
+
     let sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone()).await;
     let sched = Arc::new(RwLock::new(sched));
     sched.write().await.start().await;
@@ -64,6 +71,7 @@ async fn main() {
 
     let config_path_for_watcher = config_path.clone();
     let sched_for_watcher = sched.clone();
+    let metrics_for_watcher = metrics.clone();
     let watcher_handle = tokio::spawn(async move {
         let mut watcher = match watcher::ConfigWatcher::new(&config_path_for_watcher) {
             Ok(w) => w,
@@ -81,6 +89,7 @@ async fn main() {
                 match config::load_from_dir(&config_path_for_watcher) {
                     Ok(new_config) => {
                         info!("Config reloaded successfully");
+                        metrics_for_watcher.inc_config_reloads();
                         for warning in validate_icmp_privileges(&new_config) {
                             warn!("{}", warning);
                         }

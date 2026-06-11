@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -8,7 +9,7 @@ use tokio::time;
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
-use crate::config::{Config, EndpointConfig, Protocol};
+use crate::config::{Config, EndpointConfig, Protocol, ResolvedTarget};
 use crate::metrics::Metrics;
 use crate::probe;
 use crate::resolver;
@@ -145,15 +146,37 @@ fn spawn_probe_task(
         loop {
             interval_timer.tick().await;
 
+            metrics.inc_active_probes();
+            let probe_start = Instant::now();
+
             let _permit = match semaphore.acquire().await {
                 Ok(p) => p,
                 Err(_) => {
                     warn!("Semaphore closed, stopping for {}", endpoint.target);
+                    metrics.dec_active_probes();
                     return;
                 }
             };
 
-            let results = run_probe(&resolver, fallback_resolver.as_ref(), &endpoint, timeout).await;
+            // ── DNS resolution (moved out of run_probe for lookup tracking) ──
+            let targets =
+                resolver::resolve_endpoint(&resolver, fallback_resolver.as_ref(), &endpoint).await;
+
+            // Record DNS lookup status
+            if endpoint.protocol != Protocol::Arp {
+                let status = if targets.is_empty() {
+                    "failure"
+                } else {
+                    "success"
+                };
+                metrics.record_dns_lookup(
+                    status,
+                    &endpoint.target,
+                    &endpoint.protocol.to_string(),
+                );
+            }
+
+            let results = run_probe_on_targets(&endpoint, timeout, targets).await;
 
             let mut merged_labels = general_extra_labels.clone();
             for (k, v) in &endpoint.extra_labels {
@@ -164,18 +187,29 @@ fn spawn_probe_task(
                 let labeled = result.with_extra_labels(&merged_labels);
                 metrics.update(&labeled);
             }
+
+            // Record per-endpoint probe duration
+            let duration = probe_start.elapsed().as_secs_f64();
+            let mut duration_labels: Vec<(String, String)> = vec![
+                ("target".to_string(), endpoint.target.clone()),
+                ("protocol".to_string(), endpoint.protocol.to_string()),
+            ];
+            for (k, v) in &merged_labels {
+                duration_labels.push((k.clone(), v.clone()));
+            }
+            metrics.record_probe_duration(duration, &duration_labels);
+
+            metrics.dec_active_probes();
         }
     })
 }
 
-async fn run_probe(
-    resolver: &TokioResolver,
-    fallback_resolver: Option<&TokioResolver>,
+/// Execute probes against already-resolved targets.
+pub(crate) async fn run_probe_on_targets(
     endpoint: &EndpointConfig,
     timeout: Duration,
+    targets: Vec<ResolvedTarget>,
 ) -> Vec<probe::ProbeResult> {
-    let targets = resolver::resolve_endpoint(resolver, fallback_resolver, endpoint).await;
-
     if targets.is_empty() && endpoint.protocol != Protocol::Arp {
         warn!("No resolved targets for {}", endpoint.target);
         return vec![];
@@ -201,7 +235,10 @@ async fn run_probe(
             match endpoint.protocol {
                 Protocol::Tcp => {
                     let port = target.port.unwrap_or(80);
-                    Some(probe::tcp::probe_tcp(target.ip, port, timeout, target.original.clone()).await)
+                    Some(
+                        probe::tcp::probe_tcp(target.ip, port, timeout, target.original.clone())
+                            .await,
+                    )
                 }
                 Protocol::Udp => {
                     let port = target.port.unwrap_or(0);
@@ -209,30 +246,44 @@ async fn run_probe(
                         error!("UDP probe requires a port: {}", endpoint.target);
                         return None;
                     }
-                    Some(probe::udp::probe_udp(target.ip, port, timeout, target.original.clone()).await)
+                    Some(
+                        probe::udp::probe_udp(target.ip, port, timeout, target.original.clone())
+                            .await,
+                    )
                 }
                 Protocol::Icmp => {
-                    Some(probe::icmp::probe_icmp(target.ip, timeout, target.original.clone()).await)
+                    Some(
+                        probe::icmp::probe_icmp(target.ip, timeout, target.original.clone()).await,
+                    )
                 }
                 Protocol::Http | Protocol::Https => {
-                    Some(probe::http::probe_http(
-                        &endpoint.target,
-                        target.ip,
-                        target.port,
-                        endpoint.method,
-                        &endpoint.headers,
-                        &endpoint.payload,
-                        &endpoint.content_type,
-                        &endpoint.effective_expected_status(),
-                        &endpoint.expected_body,
-                        &endpoint.expected_body_regex,
-                        timeout,
-                        target.original.clone(),
+                    Some(
+                        probe::http::probe_http(
+                            &endpoint.target,
+                            target.ip,
+                            target.port,
+                            endpoint.method,
+                            &endpoint.headers,
+                            &endpoint.payload,
+                            &endpoint.content_type,
+                            &endpoint.effective_expected_status(),
+                            &endpoint.expected_body,
+                            &endpoint.expected_body_regex,
+                            timeout,
+                            target.original.clone(),
+                        )
+                        .await,
                     )
-                    .await)
                 }
                 Protocol::Arp => {
-                    Some(probe::arp::probe_arp(&endpoint.target, timeout, target.original.clone()).await)
+                    Some(
+                        probe::arp::probe_arp(
+                            &endpoint.target,
+                            timeout,
+                            target.original.clone(),
+                        )
+                        .await,
+                    )
                 }
             }
         }
