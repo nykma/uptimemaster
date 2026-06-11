@@ -173,5 +173,7 @@ protocol = "udp"          # udp | tcp | dot | doh
 | `um_config_reloads_total` | Counter | Total number of successful configuration reloads |
 | `um_dns_lookups_total` | Counter | DNS lookups, labeled by `status` (`success`/`failure`), `target`, and `protocol` |
 | `um_build_info` | Gauge | Build information (value always 1, labels: `version`, `commit`) |
+| `um_http_redirects_total` | Counter | Total number of HTTP redirects followed |
+| `um_response_size_bytes` | Gauge | HTTP response body size in bytes |
 
 All metrics carry `target`, `ip`, `protocol`, `port`, and any user-defined `extra_labels`.

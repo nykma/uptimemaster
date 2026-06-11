@@ -137,7 +137,7 @@ impl Metrics {
             um_config_reloads.clone(),
         );
         registry.register(
-            "um_dns_lookups_total",
+            "um_dns_lookups",
             "Total number of DNS lookups, labeled by status (success or failure)",
             um_dns_lookups.clone(),
         );
@@ -147,7 +147,7 @@ impl Metrics {
             um_build_info.clone(),
         );
         registry.register(
-            "um_http_redirects_total",
+            "um_http_redirects",
             "Total number of HTTP redirects followed",
             um_http_redirects_total.clone(),
         );
@@ -308,11 +308,8 @@ impl Metrics {
             ("target".to_string(), target.to_string()),
         ];
         labels.sort_by(|a, b| a.0.cmp(&b.0));
-        // Increment the counter by `count` (one `inc()` call per redirect)
         let counter = self.um_http_redirects_total.get_or_create(&labels);
-        for _ in 0..count {
-            counter.inc();
-        }
+        counter.inc_by(count);
     }
 
     /// Record a DNS lookup attempt with the given status ("success" or "failure").
