@@ -166,7 +166,7 @@ async fn cmd_dry_run(config_path: &str) {
         let targets =
             resolver::resolve_endpoint(&resolver, fallback_resolver.as_ref(), endpoint).await;
         let results =
-            scheduler::run_probe_on_targets(endpoint, timeout, targets).await;
+            scheduler::run_probe_on_targets(endpoint, timeout, targets, None).await;
         for r in results {
             all_results.push(serde_json::to_value(&r).unwrap_or_default());
         }

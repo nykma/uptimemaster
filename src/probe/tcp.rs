@@ -25,6 +25,7 @@ pub async fn probe_tcp(ip: IpAddr, port: u16, timeout_duration: Duration, target
             protocol: Protocol::Tcp,
             target,
             hide_ip_label: false,
+                response_size_bytes: None,
         },
         Ok(Err(e)) => {
             tracing::debug!("TCP connect failed: {}", e);
@@ -38,6 +39,7 @@ pub async fn probe_tcp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Tcp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             }
         }
         Err(_) => {
@@ -52,6 +54,7 @@ pub async fn probe_tcp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Tcp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             }
         }
     }

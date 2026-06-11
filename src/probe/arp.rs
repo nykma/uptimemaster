@@ -23,6 +23,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
                 protocol: Protocol::Arp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             };
         }
     };
@@ -41,6 +42,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
                 protocol: Protocol::Arp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             };
         }
     };
@@ -79,6 +81,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
             protocol: Protocol::Arp,
             target,
             hide_ip_label: false,
+                response_size_bytes: None,
         },
         _ => ProbeResult {
             up: false,
@@ -90,6 +93,7 @@ pub async fn probe_arp(mac_addr: &str, timeout_duration: Duration, target: Strin
             protocol: Protocol::Arp,
             target,
             hide_ip_label: false,
+                response_size_bytes: None,
         },
     }
 }

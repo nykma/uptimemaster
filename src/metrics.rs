@@ -36,6 +36,8 @@ pub struct Metrics {
     um_config_reloads: Counter,
     um_dns_lookups: Family<Vec<(String, String)>, Counter>,
     um_build_info: Family<Vec<(String, String)>, Gauge<i64, AtomicI64>>,
+    um_http_redirects_total: Family<Vec<(String, String)>, Counter>,
+    um_response_size_bytes: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
 
     // Internal state for state-change and consecutive-failure tracking
     state_map: Mutex<HashMap<Vec<(String, String)>, EndpointState>>,
@@ -68,6 +70,9 @@ impl Metrics {
         let um_config_reloads = Counter::default();
         let um_dns_lookups = Family::<Vec<(String, String)>, Counter>::default();
         let um_build_info = Family::<Vec<(String, String)>, Gauge<i64, AtomicI64>>::default();
+        let um_http_redirects_total = Family::<Vec<(String, String)>, Counter>::default();
+        let um_response_size_bytes =
+            Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
 
         registry.register(
             "um_up",
@@ -141,6 +146,16 @@ impl Metrics {
             "Build information (version, commit)",
             um_build_info.clone(),
         );
+        registry.register(
+            "um_http_redirects_total",
+            "Total number of HTTP redirects followed",
+            um_http_redirects_total.clone(),
+        );
+        registry.register(
+            "um_response_size_bytes",
+            "HTTP response body size in bytes",
+            um_response_size_bytes.clone(),
+        );
 
         Self {
             registry: Arc::new(registry),
@@ -158,6 +173,8 @@ impl Metrics {
             um_config_reloads,
             um_dns_lookups,
             um_build_info,
+            um_http_redirects_total,
+            um_response_size_bytes,
             state_map: Mutex::new(HashMap::new()),
         }
     }
@@ -249,6 +266,13 @@ impl Metrics {
         if let Some(ts) = last_success_ts {
             self.um_last_success.get_or_create(&labels).set(ts);
         }
+
+        // U8: Response body size (HTTP only)
+        if let Some(size) = r.response_size_bytes {
+            self.um_response_size_bytes
+                .get_or_create(&labels)
+                .set(size as f64);
+        }
     }
 
     // ── Methods called from scheduler / main ──
@@ -274,6 +298,21 @@ impl Metrics {
     /// Increment the config reload counter (called from main on successful reload).
     pub fn inc_config_reloads(&self) {
         self.um_config_reloads.inc();
+    }
+
+    /// Record HTTP redirect count for an endpoint. Called from the scheduler
+    /// after each HTTP/HTTPS probe cycle.
+    pub fn record_http_redirects(&self, count: u64, target: &str, protocol: &str) {
+        let mut labels = vec![
+            ("protocol".to_string(), protocol.to_string()),
+            ("target".to_string(), target.to_string()),
+        ];
+        labels.sort_by(|a, b| a.0.cmp(&b.0));
+        // Increment the counter by `count` (one `inc()` call per redirect)
+        let counter = self.um_http_redirects_total.get_or_create(&labels);
+        for _ in 0..count {
+            counter.inc();
+        }
     }
 
     /// Record a DNS lookup attempt with the given status ("success" or "failure").
@@ -339,6 +378,7 @@ mod tests {
             protocol,
             target: target.to_string(),
             hide_ip_label: true,
+            response_size_bytes: None,
         }
         .with_extra_labels(&HashMap::new())
     }
@@ -360,6 +400,7 @@ mod tests {
             protocol: Protocol::Tcp,
             target: "192.168.1.1:443".to_string(),
             hide_ip_label: false,
+            response_size_bytes: None,
         }
         .with_extra_labels(&extra);
 

@@ -17,6 +17,9 @@ pub struct ProbeResult {
     pub protocol: Protocol,
     pub target: String,
     pub hide_ip_label: bool,
+    /// HTTP response body size in bytes. Only set for HTTP/HTTPS probes.
+    #[serde(default)]
+    pub response_size_bytes: Option<u64>,
 }
 
 impl ProbeResult {

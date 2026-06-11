@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::{HttpMethod, Protocol};
@@ -19,6 +21,10 @@ pub async fn probe_http(
     expected_body_regex: &Option<String>,
     timeout_duration: Duration,
     target_label: String,
+    user_agent: Option<&str>,
+    follow_redirects: bool,
+    max_redirects: usize,
+    redirect_counter: Arc<AtomicU64>,
 ) -> ProbeResult {
     let start = std::time::Instant::now();
 
@@ -31,21 +37,20 @@ pub async fn probe_http(
     });
 
     let hostname = extract_hostname(target);
-    let client = match build_client(hostname.as_deref().unwrap_or(target), ip, actual_port, timeout_duration) {
+    let client = match build_client(
+        hostname.as_deref().unwrap_or(target),
+        ip,
+        actual_port,
+        timeout_duration,
+        user_agent,
+        follow_redirects,
+        max_redirects,
+        redirect_counter.clone(),
+    ) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to build HTTP client: {}", e);
-            return ProbeResult {
-                up: false,
-                rtt_ms: None,
-                ssl_duration_ms: None,
-            cert_expiry_secs: None,
-                ip,
-                port: Some(actual_port),
-                protocol: Protocol::Http,
-                target: target_label,
-                hide_ip_label: false,
-            };
+            return error_result(ip, actual_port, target_label, target);
         }
     };
 
@@ -76,11 +81,13 @@ pub async fn probe_http(
             let status = resp.status().as_u16();
             let mut up = expected_status.contains(&status);
 
+            let mut body_size: Option<u64> = None;
+
             // Body content check — only if status already passed and a body check is configured.
-            // We read the body once and run both the exact match and regex check against it.
             if up && (expected_body.is_some() || expected_body_regex.is_some()) {
                 match resp.text().await {
                     Ok(body) => {
+                        body_size = Some(body.len() as u64);
                         if let Some(expected) = expected_body
                             && !body.contains(expected.as_str())
                         {
@@ -118,6 +125,9 @@ pub async fn probe_http(
                         up = false;
                     }
                 }
+            } else if up {
+                // No body check configured — still record content length if available
+                body_size = resp.content_length();
             }
 
             let protocol = if target.starts_with("https://") {
@@ -145,29 +155,34 @@ pub async fn probe_http(
                 protocol,
                 target: target_label,
                 hide_ip_label: false,
+                response_size_bytes: body_size,
             }
         }
         Err(e) => {
             tracing::debug!("HTTP request to {} failed: {}", target, e);
-
-            let protocol = if target.starts_with("https://") {
-                Protocol::Https
-            } else {
-                Protocol::Http
-            };
-
-            ProbeResult {
-                up: false,
-                rtt_ms: None,
-                ssl_duration_ms: None,
-            cert_expiry_secs: None,
-                ip,
-                port: Some(actual_port),
-                protocol,
-                target: target_label,
-                hide_ip_label: false,
-            }
+            error_result(ip, actual_port, target_label, target)
         }
+    }
+}
+
+fn error_result(ip: IpAddr, port: u16, target_label: String, target: &str) -> ProbeResult {
+    let protocol = if target.starts_with("https://") {
+        Protocol::Https
+    } else {
+        Protocol::Http
+    };
+
+    ProbeResult {
+        up: false,
+        rtt_ms: None,
+        ssl_duration_ms: None,
+        cert_expiry_secs: None,
+        ip,
+        port: Some(port),
+        protocol,
+        target: target_label,
+        hide_ip_label: false,
+        response_size_bytes: None,
     }
 }
 
@@ -179,12 +194,40 @@ fn build_client(
     ip: IpAddr,
     port: u16,
     timeout_duration: Duration,
+    user_agent: Option<&str>,
+    follow_redirects: bool,
+    max_redirects: usize,
+    redirect_counter: Arc<AtomicU64>,
 ) -> Result<reqwest::Client, String> {
     let addr = SocketAddr::new(ip, port);
-    reqwest::ClientBuilder::new()
+
+    let mut builder = reqwest::ClientBuilder::new()
         .resolve_to_addrs(host, &[addr])
         .timeout(timeout_duration)
-        .danger_accept_invalid_certs(false)
+        .danger_accept_invalid_certs(false);
+
+    // Custom User-Agent
+    if let Some(ua) = user_agent {
+        builder = builder.user_agent(ua);
+    }
+
+    // Redirect policy
+    if follow_redirects {
+        builder = builder.redirect(
+            reqwest::redirect::Policy::custom(move |attempt| {
+                let current = redirect_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if current < max_redirects as u64 {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }),
+        );
+    } else {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+
+    builder
         .build()
         .map_err(|e| format!("failed to build reqwest client: {}", e))
 }

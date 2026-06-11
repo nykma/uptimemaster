@@ -66,9 +66,29 @@ pub struct EndpointConfig {
     /// IP version preference for DNS resolution.
     #[serde(default)]
     pub ip_version: Option<IpVersion>,
+    /// Custom User-Agent header for HTTP/HTTPS probes.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Follow HTTP redirects (3xx). Default: false.
+    #[serde(default)]
+    pub follow_redirects: bool,
+    /// Maximum number of redirects to follow. Default: 5 when follow_redirects is enabled.
+    #[serde(default)]
+    pub max_redirects: Option<usize>,
     /// Extra labels to attach to Prometheus metrics for this endpoint.
     #[serde(default)]
     pub extra_labels: HashMap<String, String>,
+}
+
+impl EndpointConfig {
+    /// Effective max_redirects, defaulting to 5 when follow_redirects is enabled.
+    pub fn effective_max_redirects(&self) -> usize {
+        if self.follow_redirects {
+            self.max_redirects.unwrap_or(5)
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]

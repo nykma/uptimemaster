@@ -27,6 +27,7 @@ pub async fn probe_udp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Udp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             };
         }
     };
@@ -46,6 +47,7 @@ pub async fn probe_udp(ip: IpAddr, port: u16, timeout_duration: Duration, target
             protocol: Protocol::Udp,
             target,
             hide_ip_label: false,
+                response_size_bytes: None,
         };
     }
 
@@ -63,6 +65,7 @@ pub async fn probe_udp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Udp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             }
         }
         Ok(Err(e)) => {
@@ -77,6 +80,7 @@ pub async fn probe_udp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Udp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             }
         }
         Err(_) => {
@@ -91,6 +95,7 @@ pub async fn probe_udp(ip: IpAddr, port: u16, timeout_duration: Duration, target
                 protocol: Protocol::Udp,
                 target,
                 hide_ip_label: false,
+                response_size_bytes: None,
             }
         }
     }

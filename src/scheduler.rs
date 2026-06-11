@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -176,7 +177,8 @@ fn spawn_probe_task(
                 );
             }
 
-            let results = run_probe_on_targets(&endpoint, timeout, targets).await;
+            let results =
+                run_probe_on_targets(&endpoint, timeout, targets, Some(&metrics)).await;
 
             let mut merged_labels = general_extra_labels.clone();
             for (k, v) in &endpoint.extra_labels {
@@ -209,6 +211,7 @@ pub(crate) async fn run_probe_on_targets(
     endpoint: &EndpointConfig,
     timeout: Duration,
     targets: Vec<ResolvedTarget>,
+    metrics: Option<&Arc<Metrics>>,
 ) -> Vec<probe::ProbeResult> {
     if targets.is_empty() && endpoint.protocol != Protocol::Arp {
         warn!("No resolved targets for {}", endpoint.target);
@@ -257,23 +260,39 @@ pub(crate) async fn run_probe_on_targets(
                     )
                 }
                 Protocol::Http | Protocol::Https => {
-                    Some(
-                        probe::http::probe_http(
-                            &endpoint.target,
-                            target.ip,
-                            target.port,
-                            endpoint.method,
-                            &endpoint.headers,
-                            &endpoint.payload,
-                            &endpoint.content_type,
-                            &endpoint.effective_expected_status(),
-                            &endpoint.expected_body,
-                            &endpoint.expected_body_regex,
-                            timeout,
-                            target.original.clone(),
-                        )
-                        .await,
+                    let redirect_counter = Arc::new(AtomicU64::new(0));
+                    let result = probe::http::probe_http(
+                        &endpoint.target,
+                        target.ip,
+                        target.port,
+                        endpoint.method,
+                        &endpoint.headers,
+                        &endpoint.payload,
+                        &endpoint.content_type,
+                        &endpoint.effective_expected_status(),
+                        &endpoint.expected_body,
+                        &endpoint.expected_body_regex,
+                        timeout,
+                        target.original.clone(),
+                        endpoint.user_agent.as_deref(),
+                        endpoint.follow_redirects,
+                        endpoint.effective_max_redirects(),
+                        redirect_counter.clone(),
                     )
+                    .await;
+                    // Record redirect count if any occurred
+                    let redirects =
+                        redirect_counter.load(std::sync::atomic::Ordering::Relaxed);
+                    if redirects > 0 {
+                        if let Some(m) = metrics {
+                            m.record_http_redirects(
+                                redirects,
+                                &endpoint.target,
+                                &endpoint.protocol.to_string(),
+                            );
+                        }
+                    }
+                    Some(result)
                 }
                 Protocol::Arp => {
                     Some(
