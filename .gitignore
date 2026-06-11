@@ -2,3 +2,5 @@
 /.direnv
 /result
 /AGENTS.md
+/.claude/worktrees/
+/docs
