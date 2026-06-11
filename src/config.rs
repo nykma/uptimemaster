@@ -63,6 +63,9 @@ pub struct EndpointConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub probe_all: bool,
+    /// IP version preference for DNS resolution.
+    #[serde(default)]
+    pub ip_version: Option<IpVersion>,
     /// Extra labels to attach to Prometheus metrics for this endpoint.
     #[serde(default)]
     pub extra_labels: HashMap<String, String>,
@@ -123,10 +126,43 @@ pub enum DnsProtocol {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DnsConfig {
-    /// DNS server. For UDP/TCP/DoT: an IP or hostname with optional port.
+    /// Single DNS server. For UDP/TCP/DoT: an IP or hostname with optional port.
     /// For DoH: a full URL, e.g. "https://doh.pub/dns-query".
-    pub server: String,
-    pub protocol: DnsProtocol,
+    /// Mutually exclusive with `servers`.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Multiple DNS servers for sequential failover.
+    /// Mutually exclusive with `server`.
+    #[serde(default)]
+    pub servers: Option<Vec<String>>,
+    /// Protocol for DNS communication. Required when server or servers is set.
+    #[serde(default)]
+    pub protocol: Option<DnsProtocol>,
+}
+
+impl DnsConfig {
+    /// Validate DNS configuration. Returns an error if both `server` and
+    /// `servers` are set, or if servers are specified without a protocol.
+    pub fn validate(&self) -> Result<Vec<String>, String> {
+        if self.server.is_some() && self.servers.as_ref().map_or(false, |s| !s.is_empty()) {
+            return Err(
+                "`server` and `servers` are mutually exclusive in [dns]".to_string()
+            );
+        }
+        if (self.server.is_some() || self.servers.is_some()) && self.protocol.is_none() {
+            return Err("`protocol` is required when a DNS server is configured".to_string());
+        }
+        Ok(vec![])
+    }
+}
+
+/// IP version preference for DNS resolution.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum IpVersion {
+    V4,
+    V6,
+    Any,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -325,6 +361,9 @@ pub fn load_from_dir(dir_path: &str) -> Result<Config, String> {
 
             general = Some(config.general);
             dns = config.dns;
+            if let Some(ref dns_cfg) = dns {
+                dns_cfg.validate()?;
+            }
             endpoints.append(&mut config.endpoint);
         } else {
             let value: toml::Value = toml::from_str(&content)
@@ -540,8 +579,8 @@ protocol = "http"
         .unwrap();
 
         let dns = config.dns.unwrap();
-        assert_eq!(dns.server, "1.1.1.1");
-        assert_eq!(dns.protocol, DnsProtocol::Udp);
+        assert_eq!(dns.server.as_deref(), Some("1.1.1.1"));
+        assert_eq!(dns.protocol, Some(DnsProtocol::Udp));
     }
 
     #[test]
@@ -560,8 +599,8 @@ protocol = "http"
         .unwrap();
 
         let dns = config.dns.unwrap();
-        assert_eq!(dns.server, "https://doh.pub/dns-query");
-        assert_eq!(dns.protocol, DnsProtocol::Doh);
+        assert_eq!(dns.server.as_deref(), Some("https://doh.pub/dns-query"));
+        assert_eq!(dns.protocol, Some(DnsProtocol::Doh));
     }
 
     #[test]

@@ -11,60 +11,79 @@ use tracing::warn;
 /// delaying the entire probe cycle indefinitely.
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 
+use crate::config::{DnsConfig, DnsProtocol, IpVersion};
 use crate::config::{EndpointConfig, Protocol, ResolvedTarget};
-use crate::config::{DnsConfig, DnsProtocol};
 
 pub async fn build_resolver(dns_config: Option<&DnsConfig>) -> Option<TokioResolver> {
     let dns = match dns_config {
-        None => {
-            return match TokioResolver::builder_tokio() {
-                Ok(r) => Some(r.build()),
-                Err(e) => {
-                    warn!("Failed to create default DNS resolver: {}", e);
-                    None
-                }
-            };
-        }
+        None => return build_system_resolver(),
         Some(c) => c,
     };
 
-    let (host, port) = parse_dns_server(&dns.server, &dns.protocol);
+    // Collect server list: `servers` takes precedence, then `server`.
+    let server_list: Vec<String> = if let Some(ref ss) = dns.servers {
+        if ss.is_empty() {
+            return build_system_resolver();
+        }
+        ss.clone()
+    } else if let Some(ref s) = dns.server {
+        vec![s.clone()]
+    } else {
+        return build_system_resolver();
+    };
 
-    let socket_addr = match tokio::net::lookup_host(format!("{}:{}", host, port)).await {
-        Ok(mut addrs) => match addrs.next() {
-            Some(a) => a,
-            None => {
-                warn!("DNS server '{}' resolved to no addresses", dns.server);
-                return None;
+    let protocol = match dns.protocol {
+        Some(p) => p,
+        None => {
+            warn!("DNS protocol not specified, falling back to system resolver");
+            return build_system_resolver();
+        }
+    };
+
+    let mut group = NameServerConfigGroup::new();
+
+    for server_str in &server_list {
+        let (host, port) = parse_dns_server(server_str, &protocol);
+
+        let socket_addr = match tokio::net::lookup_host(format!("{}:{}", host, port)).await {
+            Ok(mut addrs) => match addrs.next() {
+                Some(a) => a,
+                None => {
+                    warn!("DNS server '{}' resolved to no addresses", server_str);
+                    continue;
+                }
+            },
+            Err(e) => {
+                warn!("Failed to resolve DNS server '{}': {}", server_str, e);
+                continue;
             }
-        },
-        Err(e) => {
-            warn!("Failed to resolve DNS server '{}': {}", dns.server, e);
-            return None;
-        }
-    };
+        };
 
-    let group = match dns.protocol {
-        DnsProtocol::Udp | DnsProtocol::Tcp => {
-            NameServerConfigGroup::from_ips_clear(&[socket_addr.ip()], port, true)
-        }
-        DnsProtocol::Dot => {
-            NameServerConfigGroup::from_ips_tls(
+        let server_group = match protocol {
+            DnsProtocol::Udp | DnsProtocol::Tcp => {
+                NameServerConfigGroup::from_ips_clear(&[socket_addr.ip()], port, true)
+            }
+            DnsProtocol::Dot => NameServerConfigGroup::from_ips_tls(
                 &[socket_addr.ip()],
                 port,
                 host.to_string(),
                 true,
-            )
-        }
-        DnsProtocol::Doh => {
-            NameServerConfigGroup::from_ips_https(
+            ),
+            DnsProtocol::Doh => NameServerConfigGroup::from_ips_https(
                 &[socket_addr.ip()],
                 port,
                 host.to_string(),
                 true,
-            )
-        }
-    };
+            ),
+        };
+
+        group.merge(server_group);
+    }
+
+    if group.is_empty() {
+        warn!("No DNS servers could be resolved, falling back to system resolver");
+        return build_system_resolver();
+    }
 
     let resolver_config = ResolverConfig::from_parts(None, vec![], group);
 
@@ -76,6 +95,16 @@ pub async fn build_resolver(dns_config: Option<&DnsConfig>) -> Option<TokioResol
     .build();
 
     Some(resolver)
+}
+
+fn build_system_resolver() -> Option<TokioResolver> {
+    match TokioResolver::builder_tokio() {
+        Ok(r) => Some(r.build()),
+        Err(e) => {
+            warn!("Failed to create default DNS resolver: {}", e);
+            None
+        }
+    }
 }
 
 fn parse_dns_server<'a>(server: &'a str, protocol: &DnsProtocol) -> (&'a str, u16) {
@@ -147,7 +176,7 @@ async fn resolve_icmp_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, fallback_resolver, target).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, target, endpoint.ip_version).await;
     if ips.is_empty() {
         warn!("ICMP target '{}' could not be resolved", target);
         return vec![];
@@ -198,7 +227,7 @@ async fn resolve_tcp_udp_http_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, fallback_resolver, host).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, host, endpoint.ip_version).await;
     if ips.is_empty() {
         warn!("Target '{}' could not be resolved", target);
         return vec![];
@@ -245,7 +274,7 @@ async fn resolve_http_target(
         }];
     }
 
-    let ips = resolve_hostname(resolver, fallback_resolver, &host).await;
+    let ips = resolve_hostname(resolver, fallback_resolver, &host, endpoint.ip_version).await;
     if ips.is_empty() {
         warn!("HTTP target '{}' could not be resolved", target);
         return vec![];
@@ -276,8 +305,9 @@ async fn resolve_hostname(
     resolver: &TokioResolver,
     fallback_resolver: Option<&TokioResolver>,
     hostname: &str,
+    ip_version: Option<IpVersion>,
 ) -> Vec<IpAddr> {
-    let mut results = do_lookup(resolver, hostname).await;
+    let mut results = do_lookup(resolver, hostname, ip_version).await;
 
     // Fall back to system resolver if custom DNS returned nothing
     if results.is_empty()
@@ -287,38 +317,53 @@ async fn resolve_hostname(
             "Custom DNS returned no results for '{}', falling back to system resolver",
             hostname
         );
-        results = do_lookup(fallback, hostname).await;
+        results = do_lookup(fallback, hostname, ip_version).await;
     }
 
     results
 }
 
-async fn do_lookup(resolver: &TokioResolver, hostname: &str) -> Vec<IpAddr> {
+async fn do_lookup(
+    resolver: &TokioResolver,
+    hostname: &str,
+    ip_version: Option<IpVersion>,
+) -> Vec<IpAddr> {
     let mut results = Vec::new();
+    let ipv = ip_version.unwrap_or(IpVersion::Any);
 
-    let ipv4_fut = resolver.ipv4_lookup(hostname);
-    match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv4_fut).await {
-        Ok(Ok(response)) => {
-            results.extend(response.into_iter().map(|r| IpAddr::V4(r.0)));
-        }
-        Ok(Err(e)) => {
-            warn!("IPv4 lookup for '{}' failed: {}", hostname, e);
-        }
-        Err(_) => {
-            warn!("IPv4 lookup for '{}' timed out after {:?}", hostname, DNS_LOOKUP_TIMEOUT);
+    if ipv != IpVersion::V6 {
+        let ipv4_fut = resolver.ipv4_lookup(hostname);
+        match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv4_fut).await {
+            Ok(Ok(response)) => {
+                results.extend(response.into_iter().map(|r| IpAddr::V4(r.0)));
+            }
+            Ok(Err(e)) => {
+                warn!("IPv4 lookup for '{}' failed: {}", hostname, e);
+            }
+            Err(_) => {
+                warn!(
+                    "IPv4 lookup for '{}' timed out after {:?}",
+                    hostname, DNS_LOOKUP_TIMEOUT
+                );
+            }
         }
     }
 
-    let ipv6_fut = resolver.ipv6_lookup(hostname);
-    match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv6_fut).await {
-        Ok(Ok(response)) => {
-            results.extend(response.into_iter().map(|r| IpAddr::V6(r.0)));
-        }
-        Ok(Err(e)) => {
-            warn!("IPv6 lookup for '{}' failed: {}", hostname, e);
-        }
-        Err(_) => {
-            warn!("IPv6 lookup for '{}' timed out after {:?}", hostname, DNS_LOOKUP_TIMEOUT);
+    if ipv != IpVersion::V4 {
+        let ipv6_fut = resolver.ipv6_lookup(hostname);
+        match tokio::time::timeout(DNS_LOOKUP_TIMEOUT, ipv6_fut).await {
+            Ok(Ok(response)) => {
+                results.extend(response.into_iter().map(|r| IpAddr::V6(r.0)));
+            }
+            Ok(Err(e)) => {
+                warn!("IPv6 lookup for '{}' failed: {}", hostname, e);
+            }
+            Err(_) => {
+                warn!(
+                    "IPv6 lookup for '{}' timed out after {:?}",
+                    hostname, DNS_LOOKUP_TIMEOUT
+                );
+            }
         }
     }
 
