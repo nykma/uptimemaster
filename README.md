@@ -138,9 +138,18 @@ protocol = "udp"          # udp | tcp | dot | doh
 | Metric | Type | Description |
 |---|---|---|
 | `um_up` | Gauge | 1 if the target is reachable, 0 otherwise |
-| `um_request_rtt_seconds` | Gauge | Round-trip time in seconds |
-| `um_ssl_duration_seconds` | Gauge | TLS handshake duration (HTTPS only) |
+| `um_request_rtt` | Gauge | Round-trip time in milliseconds **(deprecated, use `um_request_rtt_seconds` instead)** |
+| `um_request_rtt_seconds` | Histogram | Round-trip time in seconds (exponential buckets: 1ms–65s) |
+| `um_ssl_duration` | Gauge | TLS handshake duration in milliseconds |
 | `um_tls_cert_expiry_seconds` | Gauge | Unix timestamp when the TLS certificate expires (0 if not applicable) |
 | `um_probes_total` | Counter | Total probe attempts, with `status="success"` or `status="failure"` label |
+| `um_probe_duration_seconds` | Histogram | Wall-clock duration of each probe cycle in seconds |
+| `um_probes_active` | Gauge | Number of probe tasks currently in-flight |
+| `um_consecutive_failures` | Gauge | Consecutive probe failures (resets to 0 on success) |
+| `um_last_state_change_timestamp_seconds` | Gauge | Unix timestamp of the last up/down state transition |
+| `um_last_success_timestamp_seconds` | Gauge | Unix timestamp of the last successful probe |
+| `um_config_reloads_total` | Counter | Total number of successful configuration reloads |
+| `um_dns_lookups_total` | Counter | DNS lookups, labeled by `status` (`success`/`failure`), `target`, and `protocol` |
+| `um_build_info` | Gauge | Build information (value always 1, labels: `version`, `commit`) |
 
 All metrics carry `target`, `ip`, `protocol`, `port`, and any user-defined `extra_labels`.

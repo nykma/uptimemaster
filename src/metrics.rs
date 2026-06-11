@@ -28,6 +28,7 @@ pub struct Metrics {
 
     // U1: New metrics
     um_probe_duration: Family<Vec<(String, String)>, Histogram>,
+    um_request_rtt_hist: Family<Vec<(String, String)>, Histogram>,
     um_probes_active: Gauge<i64, AtomicI64>,
     um_consecutive_failures: Family<Vec<(String, String)>, Gauge>,
     um_last_state_change: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
@@ -51,9 +52,14 @@ impl Metrics {
         let um_probes_total = Family::<Vec<(String, String)>, Counter>::default();
 
         // U1: New metric families
-        let um_probe_duration = Family::<Vec<(String, String)>, Histogram>::new_with_constructor(|| {
-            Histogram::new(exponential_buckets(0.001, 2.0, 16))
-        });
+        let um_probe_duration =
+            Family::<Vec<(String, String)>, Histogram>::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.001, 2.0, 16))
+            });
+        let um_request_rtt_hist =
+            Family::<Vec<(String, String)>, Histogram>::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.001, 2.0, 16))
+            });
         let um_probes_active = Gauge::<i64, AtomicI64>::default();
         let um_consecutive_failures = Family::<Vec<(String, String)>, Gauge>::default();
         let um_last_state_change =
@@ -70,7 +76,7 @@ impl Metrics {
         );
         registry.register(
             "um_request_rtt",
-            "Round-trip time in milliseconds",
+            "Round-trip time in milliseconds (deprecated, use um_request_rtt_seconds instead)",
             um_request_rtt.clone(),
         );
         registry.register(
@@ -94,6 +100,11 @@ impl Metrics {
             "um_probe_duration_seconds",
             "Duration of each probe cycle in seconds (wall-clock time from permit acquisition to result processing)",
             um_probe_duration.clone(),
+        );
+        registry.register(
+            "um_request_rtt_seconds",
+            "Round-trip time in seconds (histogram)",
+            um_request_rtt_hist.clone(),
         );
         registry.register(
             "um_probes_active",
@@ -139,6 +150,7 @@ impl Metrics {
             um_tls_cert_expiry,
             um_probes_total,
             um_probe_duration,
+            um_request_rtt_hist,
             um_probes_active,
             um_consecutive_failures,
             um_last_state_change,
@@ -172,6 +184,15 @@ impl Metrics {
 
         let rtt_gauge = self.um_request_rtt.get_or_create(&labels);
         rtt_gauge.set(r.rtt_ms.unwrap_or(0.0));
+
+        // U2: Record RTT in histogram (only on successful probes with a value)
+        if r.up {
+            if let Some(rtt_ms) = r.rtt_ms {
+                self.um_request_rtt_hist
+                    .get_or_create(&labels)
+                    .observe(rtt_ms / 1000.0);
+            }
+        }
 
         let ssl_gauge = self.um_ssl_duration.get_or_create(&labels);
         ssl_gauge.set(r.ssl_duration_ms.unwrap_or(0.0));
