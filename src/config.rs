@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -68,7 +68,7 @@ pub struct EndpointConfig {
     pub extra_labels: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     Tcp,

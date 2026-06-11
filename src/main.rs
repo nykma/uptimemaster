@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -17,12 +17,22 @@ struct Cli {
     /// Path to configuration directory
     #[arg(short, long, default_value = "/config")]
     config: String,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run one probe cycle and print results as JSON, then exit
+    DryRun,
+    /// Validate config and print warnings, then exit
+    Validate,
 }
 
 #[tokio::main]
 async fn main() {
-    let log_format =
-        std::env::var("UM_LOG_FORMAT").unwrap_or_default();
+    let log_format = std::env::var("UM_LOG_FORMAT").unwrap_or_default();
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
@@ -53,11 +63,105 @@ async fn main() {
         .expect("Failed to install rustls crypto provider");
 
     let cli = Cli::parse();
-    let config_path = cli.config;
 
+    match cli.command {
+        Some(Command::DryRun) => cmd_dry_run(&cli.config).await,
+        Some(Command::Validate) => cmd_validate(&cli.config),
+        None => run_daemon(&cli.config).await,
+    }
+}
+
+// ── Dry-run subcommand ──
+
+async fn cmd_dry_run(config_path: &str) {
+    let config = match config::load_from_dir(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let resolver = resolver::build_resolver(config.dns.as_ref())
+        .await
+        .unwrap_or_else(|| {
+            hickory_resolver::TokioResolver::builder_tokio()
+                .expect("Failed to create fallback DNS resolver")
+                .build()
+        });
+
+    let fallback_resolver = if config.dns.is_some() {
+        hickory_resolver::TokioResolver::builder_tokio()
+            .ok()
+            .map(|b| b.build())
+    } else {
+        None
+    };
+
+    let timeout = std::time::Duration::from_millis(config.general.default_timeout_ms);
+
+    let mut all_results: Vec<serde_json::Value> = Vec::new();
+
+    for endpoint in &config.endpoint {
+        let targets =
+            resolver::resolve_endpoint(&resolver, fallback_resolver.as_ref(), endpoint).await;
+        let results =
+            scheduler::run_probe_on_targets(endpoint, timeout, targets).await;
+        for r in results {
+            all_results.push(serde_json::to_value(&r).unwrap_or_default());
+        }
+    }
+
+    let output = serde_json::to_string_pretty(&all_results).unwrap_or_else(|e| {
+        eprintln!("Failed to serialize results: {}", e);
+        std::process::exit(1);
+    });
+    println!("{}", output);
+    std::process::exit(0);
+}
+
+// ── Validate subcommand ──
+
+fn cmd_validate(config_path: &str) {
+    let config = match config::load_from_dir(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Config loading error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut has_errors = false;
+    for endpoint in &config.endpoint {
+        match endpoint.validate() {
+            Ok(warnings) => {
+                for w in &warnings {
+                    println!("warning: {}", w);
+                }
+            }
+            Err(e) => {
+                eprintln!("error: endpoint '{}': {}", endpoint.target, e);
+                has_errors = true;
+            }
+        }
+    }
+
+    // Also print ICMP capability warnings (same as daemon startup)
+    for warning in validate_icmp_privileges(&config) {
+        println!("warning: {}", warning);
+    }
+
+    if has_errors {
+        std::process::exit(1);
+    }
+}
+
+// ── Daemon mode ──
+
+async fn run_daemon(config_path: &str) {
     info!("Loading config from: {}", config_path);
 
-    let initial_config = match config::load_from_dir(&config_path) {
+    let initial_config = match config::load_from_dir(config_path) {
         Ok(c) => c,
         Err(e) => {
             error!("Failed to load config: {}", e);
@@ -88,7 +192,7 @@ async fn main() {
         start_metrics_server(metrics_port, metrics_registry).await;
     });
 
-    let config_path_for_watcher = config_path.clone();
+    let config_path_for_watcher = config_path.to_string();
     let sched_for_watcher = sched.clone();
     let metrics_for_watcher = metrics.clone();
     let watcher_handle = tokio::spawn(async move {
@@ -152,7 +256,10 @@ async fn main() {
 fn validate_icmp_privileges(config: &config::Config) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    let has_icmp = config.endpoint.iter().any(|e| e.protocol == config::Protocol::Icmp);
+    let has_icmp = config
+        .endpoint
+        .iter()
+        .any(|e| e.protocol == config::Protocol::Icmp);
     if has_icmp && !has_net_raw_capability() {
         warnings.push("ICMP probes configured but CAP_NET_RAW capability not detected. ICMP probes may fail. Run with --cap-add=NET_RAW or as root.".to_string());
     }
@@ -185,10 +292,7 @@ fn has_net_raw_capability() -> bool {
     }
 }
 
-async fn start_metrics_server(
-    port: u16,
-    registry: Arc<prometheus_client::registry::Registry>,
-) {
+async fn start_metrics_server(port: u16, registry: Arc<prometheus_client::registry::Registry>) {
     use axum::response::IntoResponse;
     use axum::routing::get;
     use axum::Router;
@@ -202,12 +306,20 @@ async fn start_metrics_server(
                 match prometheus_client::encoding::text::encode(&mut buffer, &registry) {
                     Ok(()) => (
                         axum::http::StatusCode::OK,
-                        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/plain; version=0.0.4; charset=utf-8",
+                        )],
                         buffer,
-                    ).into_response(),
+                    )
+                        .into_response(),
                     Err(e) => {
                         tracing::error!("Failed to encode metrics: {}", e);
-                        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to encode metrics").into_response()
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to encode metrics",
+                        )
+                            .into_response()
                     }
                 }
             }

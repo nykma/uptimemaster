@@ -1,7 +1,10 @@
 use std::net::IpAddr;
 
+use serde::Serialize;
+
 use crate::config::Protocol;
 
+#[derive(Serialize)]
 pub struct ProbeResult {
     pub up: bool,
     pub rtt_ms: Option<f64>,

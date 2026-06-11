@@ -2368,6 +2368,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "serde",
+ "serde_json",
  "surge-ping",
  "tempfile",
  "tokio",
