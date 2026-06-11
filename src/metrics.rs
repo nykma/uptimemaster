@@ -297,6 +297,11 @@ impl Metrics {
         self.um_build_info.get_or_create(&labels).set(1);
     }
 
+    /// Return the current number of in-flight probes.
+    pub fn active_probes(&self) -> i64 {
+        self.um_probes_active.get()
+    }
+
     pub fn registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }

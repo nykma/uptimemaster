@@ -1,6 +1,11 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -28,6 +33,61 @@ enum Command {
     DryRun,
     /// Validate config and print warnings, then exit
     Validate,
+}
+
+// ── Health endpoint state ──
+
+struct HealthState {
+    startup_time: Instant,
+    endpoint_count: Mutex<usize>,
+    last_reload_time: Mutex<Option<f64>>,
+    metrics: Arc<metrics::Metrics>,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    uptime_seconds: u64,
+    endpoint_count: usize,
+    active_probes: u64,
+    last_reload_time: Option<String>,
+}
+
+/// Convert a Unix timestamp (seconds since epoch) to an ISO 8601 / RFC 3339
+/// string. Uses a compact implementation of the civil-date algorithm.
+fn unix_to_rfc3339(ts: f64) -> String {
+    let secs = ts as i64;
+    let nsecs = ((ts - secs as f64) * 1_000_000_000.0) as u32;
+    let total_secs = if secs >= 0 { secs as u64 } else { 0 };
+
+    // Split into days and time-of-day
+    let days = (total_secs / 86400) as i64;
+    let time_of_day = (total_secs % 86400) as u32;
+
+    // Civil date from days since Unix epoch (1970-01-01)
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    let h = time_of_day / 3600;
+    let min = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    if nsecs > 0 {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
+            y, m, d, h, min, s, nsecs
+        )
+    } else {
+        format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, min, s)
+    }
 }
 
 #[tokio::main]
@@ -181,6 +241,13 @@ async fn run_daemon(config_path: &str) {
         option_env!("BUILD_COMMIT").unwrap_or("unknown"),
     );
 
+    let health_state = Arc::new(HealthState {
+        startup_time: Instant::now(),
+        endpoint_count: Mutex::new(initial_config.endpoint.len()),
+        last_reload_time: Mutex::new(None),
+        metrics: metrics.clone(),
+    });
+
     let sched = scheduler::Scheduler::new(initial_config.clone(), metrics.clone()).await;
     let sched = Arc::new(RwLock::new(sched));
     sched.write().await.start().await;
@@ -188,13 +255,15 @@ async fn run_daemon(config_path: &str) {
     let metrics_port = initial_config.general.port;
     let metrics_registry = metrics.registry();
 
+    let health_state_for_server = health_state.clone();
     let server_handle = tokio::spawn(async move {
-        start_metrics_server(metrics_port, metrics_registry).await;
+        start_metrics_server(metrics_port, metrics_registry, health_state_for_server).await;
     });
 
     let config_path_for_watcher = config_path.to_string();
     let sched_for_watcher = sched.clone();
     let metrics_for_watcher = metrics.clone();
+    let health_state_for_watcher = health_state.clone();
     let watcher_handle = tokio::spawn(async move {
         let mut watcher = match watcher::ConfigWatcher::new(&config_path_for_watcher) {
             Ok(w) => w,
@@ -213,6 +282,11 @@ async fn run_daemon(config_path: &str) {
                     Ok(new_config) => {
                         info!("Config reloaded successfully");
                         metrics_for_watcher.inc_config_reloads();
+                        // Update health state
+                        *health_state_for_watcher.endpoint_count.lock().unwrap() =
+                            new_config.endpoint.len();
+                        *health_state_for_watcher.last_reload_time.lock().unwrap() =
+                            Some(now_unix());
                         for warning in validate_icmp_privileges(&new_config) {
                             warn!("{}", warning);
                         }
@@ -251,6 +325,13 @@ async fn run_daemon(config_path: &str) {
     // Stop all probe tasks
     sched.write().await.stop().await;
     info!("All probe tasks stopped. Goodbye.");
+}
+
+fn now_unix() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
 }
 
 fn validate_icmp_privileges(config: &config::Config) -> Vec<String> {
@@ -292,12 +373,20 @@ fn has_net_raw_capability() -> bool {
     }
 }
 
-async fn start_metrics_server(port: u16, registry: Arc<prometheus_client::registry::Registry>) {
+async fn start_metrics_server(
+    port: u16,
+    registry: Arc<prometheus_client::registry::Registry>,
+    health_state: Arc<HealthState>,
+) {
+    use axum::extract::Query;
     use axum::response::IntoResponse;
     use axum::routing::get;
+    use axum::Json;
     use axum::Router;
+    use std::collections::HashMap;
 
     let registry_metrics = registry.clone();
+    let health_state_metrics = health_state.clone();
     let app = Router::new()
         .route("/metrics", get(move || {
             let registry = registry_metrics.clone();
@@ -324,8 +413,33 @@ async fn start_metrics_server(port: u16, registry: Arc<prometheus_client::regist
                 }
             }
         }))
-        .route("/health", get(|| async {
-            (axum::http::StatusCode::OK, "OK")
+        .route("/health", get(move |query: Query<HashMap<String, String>>| {
+            let state = health_state_metrics.clone();
+            async move {
+                // Backward-compatible plain text response
+                if query.get("format").map_or(false, |v| v == "text") {
+                    return (axum::http::StatusCode::OK, "OK").into_response();
+                }
+
+                let uptime = state.startup_time.elapsed().as_secs();
+                let endpoint_count = *state.endpoint_count.lock().unwrap();
+                let active_probes = state.metrics.active_probes() as u64;
+                let last_reload_time = state
+                    .last_reload_time
+                    .lock()
+                    .unwrap()
+                    .map(unix_to_rfc3339);
+
+                let response = HealthResponse {
+                    status: "ok".to_string(),
+                    uptime_seconds: uptime,
+                    endpoint_count,
+                    active_probes,
+                    last_reload_time,
+                };
+
+                (axum::http::StatusCode::OK, Json(response)).into_response()
+            }
         }));
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
