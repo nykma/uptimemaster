@@ -1,0 +1,35 @@
+[Unit]
+Description=uptimemaster - Network uptime monitoring daemon
+Documentation=https://github.com/nykma/uptimemaster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/uptimemaster -c /etc/uptimemaster/config
+Restart=always
+RestartSec=5
+
+# Security hardening
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/uptimemaster
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+# Allow binding to privileged ports (< 1024) if needed
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

@@ -57,6 +57,28 @@ sudo setcap cap_net_raw+ep ./uptimemaster
 
 If `CAP_NET_RAW` is missing, uptimemaster prints a warning at startup and ICMP probes will fail at runtime with a permission error.
 
+### systemd Deployment
+
+A [systemd unit template](contrib/uptimemaster.service) is provided for running uptimemaster as a service:
+
+```bash
+# Install the binary
+sudo cp uptimemaster /usr/local/bin/uptimemaster
+sudo setcap cap_net_raw+ep /usr/local/bin/uptimemaster
+
+# Install config
+sudo mkdir -p /etc/uptimemaster/config
+sudo cp config/*.toml /etc/uptimemaster/config/
+
+# Install and enable the service
+sudo cp contrib/uptimemaster.service /etc/systemd/system/
+sudo mkdir -p /var/lib/uptimemaster
+sudo systemctl daemon-reload
+sudo systemctl enable --now uptimemaster
+```
+
+Pre-built binaries (`uptimemaster-x86_64`, `uptimemaster-aarch64`) are attached to [GitHub Releases](https://github.com/nykma/uptimemaster/releases) for every semver tag.
+
 ## Configuration
 
 uptimemaster reads all `.toml` files from a configuration directory (default: `/config`).

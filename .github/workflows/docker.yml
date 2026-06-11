@@ -53,3 +53,45 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           platforms: ${{ matrix.platform }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            libpcap-dev \
+            libpcap0.8-dev:amd64
+
+      - name: Build (x86_64)
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          mv target/x86_64-unknown-linux-gnu/release/uptimemaster uptimemaster-x86_64
+
+      - name: Build (aarch64)
+        run: |
+          PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+          cargo build --release --target aarch64-unknown-linux-gnu
+          mv target/aarch64-unknown-linux-gnu/release/uptimemaster uptimemaster-aarch64
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            uptimemaster-x86_64
+            uptimemaster-aarch64
+            contrib/uptimemaster.service
