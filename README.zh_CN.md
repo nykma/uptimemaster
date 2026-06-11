@@ -57,6 +57,28 @@ sudo setcap cap_net_raw+ep ./uptimemaster
 
 若缺少 `CAP_NET_RAW`，uptimemaster 将在启动时输出警告，且 ICMP 探针运行时会因权限不足而失败。
 
+### systemd 部署
+
+项目提供了 [systemd unit 模板](contrib/uptimemaster.service)，用于将 uptimemaster 作为系统服务运行：
+
+```bash
+# 安装二进制文件
+sudo cp uptimemaster /usr/local/bin/uptimemaster
+sudo setcap cap_net_raw+ep /usr/local/bin/uptimemaster
+
+# 安装配置
+sudo mkdir -p /etc/uptimemaster/config
+sudo cp config/*.toml /etc/uptimemaster/config/
+
+# 安装并启用服务
+sudo cp contrib/uptimemaster.service /etc/systemd/system/
+sudo mkdir -p /var/lib/uptimemaster
+sudo systemctl daemon-reload
+sudo systemctl enable --now uptimemaster
+```
+
+每个 semver 标签推送后，预编译二进制文件（`uptimemaster-x86_64`、`uptimemaster-aarch64`）会发布到 [GitHub Releases](https://github.com/nykma/uptimemaster/releases)。
+
 ## 配置文件
 
 uptimemaster 从一个配置目录中加载所有 `.toml` 文件（默认路径 `/config`）。
@@ -128,7 +150,7 @@ protocol = "udp"          # udp | tcp | dot | doh
 | `dot` | DNS over TLS (DoT) | 853 | `1.1.1.1:853` |
 | `doh` | DNS over HTTPS (DoH) | 443 | `https://doh.pub/dns-query` |
 
-- 只支持指定**单个** DNS 服务器（不支持多个）。
+- `server` 指定单个 DNS 服务器，`servers` 指定多个服务器（顺序故障转移），两者互斥。
 - DoT/DoH 使用主机名时，主机名将作为 TLS SNI。
 - DoH 必须填写完整 URL（如 `https://doh.pub/dns-query`）。
 - 不配置 `[dns]` 则使用系统解析器。
@@ -138,9 +160,20 @@ protocol = "udp"          # udp | tcp | dot | doh
 | 指标名 | 类型 | 说明 |
 |---|---|---|
 | `um_up` | Gauge | 目标可达则为 1，否则为 0 |
-| `um_request_rtt_seconds` | Gauge | 往返耗时（秒） |
-| `um_ssl_duration_seconds` | Gauge | TLS 握手耗时（仅 HTTPS） |
+| `um_request_rtt` | Gauge | 往返耗时（毫秒）**（已废弃，请使用 `um_request_rtt_seconds` 替代）** |
+| `um_request_rtt_seconds` | Histogram | 往返耗时（秒，指数分布桶：1ms–65s） |
+| `um_ssl_duration` | Gauge | TLS 握手耗时（毫秒） |
 | `um_tls_cert_expiry_seconds` | Gauge | TLS 证书过期 Unix 时间戳（不适用则为 0） |
 | `um_probes_total` | Counter | 探测总次数，带 `status="success"` 或 `status="failure"` 标签 |
+| `um_probe_duration_seconds` | Histogram | 每次探测周期的墙上时钟耗时（秒） |
+| `um_probes_active` | Gauge | 当前正在进行的探测任务数 |
+| `um_consecutive_failures` | Gauge | 连续探测失败次数（成功后归零） |
+| `um_last_state_change_timestamp_seconds` | Gauge | 最后一次 up/down 状态翻转的 Unix 时间戳 |
+| `um_last_success_timestamp_seconds` | Gauge | 最后一次成功探测的 Unix 时间戳 |
+| `um_config_reloads_total` | Counter | 配置热加载成功总次数 |
+| `um_dns_lookups_total` | Counter | DNS 查询次数，按 `status`（`success`/`failure`）、`target`、`protocol` 区分 |
+| `um_build_info` | Gauge | 构建信息（值恒为 1，标签：`version`、`commit`） |
+| `um_http_redirects_total` | Counter | HTTP 重定向跟随总次数 |
+| `um_response_size_bytes` | Gauge | HTTP 响应体字节数 |
 
 所有指标均带有 `target`、`ip`、`protocol`、`port` 以及用户自定义的 `extra_labels`。
