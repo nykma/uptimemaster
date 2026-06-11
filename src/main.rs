@@ -21,13 +21,32 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::ACTIVE)
-        .init();
+    let log_format =
+        std::env::var("UM_LOG_FORMAT").unwrap_or_default();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    match log_format.as_str() {
+        "json" => {
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .json()
+                .flatten_event(true)
+                .init();
+        }
+        other => {
+            if !other.is_empty() && other != "text" {
+                eprintln!(
+                    "warning: unknown UM_LOG_FORMAT='{}', falling back to text format",
+                    other
+                );
+            }
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::ACTIVE)
+                .init();
+        }
+    }
 
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
